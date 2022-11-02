@@ -6,6 +6,8 @@ from __future__ import print_function
 
 import logging
 
+import os
+
 import numpy as np
 
 import torch
@@ -17,7 +19,8 @@ from sklearn.metrics import average_precision_score
 from torch.utils.data import DataLoader
 
 from dataloader import TestDataset
-
+import pdb
+import pandas as pd
 class KGEModel(nn.Module):
     def __init__(self, model_name, nentity, nrelation, hidden_dim, gamma, 
                  double_entity_embedding=False, double_relation_embedding=False):
@@ -27,7 +30,7 @@ class KGEModel(nn.Module):
         self.nrelation = nrelation
         self.hidden_dim = hidden_dim
         self.epsilon = 2.0
-        
+
         self.gamma = nn.Parameter(
             torch.Tensor([gamma]), 
             requires_grad=False
@@ -373,56 +376,171 @@ class KGEModel(nn.Module):
             
             test_dataset_list = [test_dataloader_head, test_dataloader_tail]
             
+            # store avg-hits results in logs, head-batch in head_batch, and tail-batch in tail_batch
             logs = []
-
+            head_batch_logs = []
+            tail_batch_logs = []
+            
+            
             step = 0
             total_steps = sum([len(dataset) for dataset in test_dataset_list])
 
             with torch.no_grad():
+
                 for test_dataset in test_dataset_list:
+                    
                     for positive_sample, negative_sample, filter_bias, mode in test_dataset:
+                        
                         if args.cuda:
                             positive_sample = positive_sample.cuda()
                             negative_sample = negative_sample.cuda()
                             filter_bias = filter_bias.cuda()
 
                         batch_size = positive_sample.size(0)
-
+            
                         score = model((positive_sample, negative_sample), mode)
                         score += filter_bias
+                        
+                        #if args.do_test and (step % total_steps==0):
+                        #    logging.info('Exporting the raw scores... (%d/%d)' % (step, total_steps))
+                        #    KGEModel.export_raw_scores(score, positive_sample, mode, args)
 
                         #Explicitly sort all the entities to ensure that there is no test exposure bias
                         argsort = torch.argsort(score, dim = 1, descending=True)
-
+                        #import pdb
+                        #pdb.set_trace()
+                        if step%5==0 or step%total_steps==0:
+                            logging.info (f'Evaluating the model... ({step}/{total_steps})')
+                        
                         if mode == 'head-batch':
                             positive_arg = positive_sample[:, 0]
+                            if args.do_test or args.do_predict:
+                                KGEModel.make_raw_scores_df(score, positive_sample, mode, args)
+
                         elif mode == 'tail-batch':
                             positive_arg = positive_sample[:, 2]
+                            if args.do_test or args.do_predict:
+                                KGEModel.make_raw_scores_df(score, positive_sample, mode, args)
+
                         else:
                             raise ValueError('mode %s not supported' % mode)
 
                         for i in range(batch_size):
                             #Notice that argsort is not ranking
-                            ranking = (argsort[i, :] == positive_arg[i]).nonzero()
+                            ranking = torch.nonzero(argsort[i, :] == positive_arg[i])
                             assert ranking.size(0) == 1
 
                             #ranking + 1 is the true ranking used in evaluation metrics
                             ranking = 1 + ranking.item()
-                            logs.append({
+                            ranking_dict ={
                                 'MRR': 1.0/ranking,
                                 'MR': float(ranking),
                                 'HITS@1': 1.0 if ranking <= 1 else 0.0,
                                 'HITS@3': 1.0 if ranking <= 3 else 0.0,
                                 'HITS@10': 1.0 if ranking <= 10 else 0.0,
-                            })
-
-                        if step % args.test_log_steps == 0:
-                            logging.info('Evaluating the model... (%d/%d)' % (step, total_steps))
+                            }
+                            logs.append(ranking_dict)
+                            
+                            # add un-averaged metrics
+                            if mode == 'head-batch':
+                                head_batch_logs.append(ranking_dict)
+                            elif mode == 'tail-batch':
+                                tail_batch_logs.append(ranking_dict)
 
                         step += 1
-
+                        
             metrics = {}
+            # un-averaged metric average calculation
+            metrics_head_batch = {}
+            metrics_tail_batch = {}
+            
             for metric in logs[0].keys():
                 metrics[metric] = sum([log[metric] for log in logs])/len(logs)
+                metrics_head_batch[metric] = sum([log[metric] for log in head_batch_logs])/len(head_batch_logs)
+                metrics_tail_batch[metric] = sum([log[metric] for log in tail_batch_logs])/len(tail_batch_logs)
+
+            # update the un-averaged metric key names
+            metrics_head_batch2 = dict(zip(['head-batch '+i for i in metrics_head_batch],metrics_head_batch.values()))
+            metrics_tail_batch2 = dict(zip(['tail-batch '+i for i in metrics_tail_batch],metrics_tail_batch.values()))
+            metrics.update(metrics_head_batch2)
+            metrics.update(metrics_tail_batch2)
 
         return metrics
+
+    @staticmethod
+    def make_raw_scores_df(scores, positive_samples, mode, args):
+        '''
+        Takes scores and creates a dataframe stored at self.raw_scores
+        
+        Input:
+        ----------
+        scores:                score output from the model
+        positive_samples:      triple to be predicted
+        mode (batch type):     {0,1} where 0 is head-batch, and 1 is tail-batch
+ 
+        Output:
+        ----------
+        Dataframe in the format of:
+        head    relation    tail   [score_0, score_1, ... , score_n]    mode
+        '''
+        h,r,t,score_list,batch = list(),list(),list(),list(),list()
+        
+        for i, v in enumerate(scores):
+            pos_sample = positive_samples[i].tolist()
+            pos_sample.append(v.tolist())
+            #pos_sample.append(mode)
+            
+            h.append(pos_sample[0])
+            r.append(pos_sample[1])
+            t.append(pos_sample[2])
+            score_list.append(pos_sample[3])
+            #mode.append(pos_sample[4])
+            batch.append(mode)
+        # check mode Train valid or test
+        mode_dict = ''
+        if args.do_train:
+            mode_dict = 'train_'
+        elif args.do_valid:
+            mode_dict = 'valid_'
+        elif args.do_test:
+            mode_dict = 'test_'
+        elif args.do_predict:
+            mode_dict = 'predict_'
+        
+        export_location = os.path.join(args.save_path or args.init_checkpoint, mode_dict+'scores.tsv')
+        with open(export_location,'a') as f:
+            for i,v in enumerate(h):
+                f.write(f'{v}\t{r[i]}\t{t[i]}\t{score_list[i]}\t{batch[i]}\n')
+
+    
+    @staticmethod
+    def export_raw_scores(df, args):
+        '''
+        Takes scores and exports them to the args.save_path
+        
+        Input:
+        ----------
+        df:                    raw dataframe to export
+        args:                  arguments from the "run"
+ 
+        Output:
+        ----------
+        scores.tsv to the directory from args.save_path. The output file format is:
+        head \t relation \t tail \t [score_0, score_1, ... , score_n] \t mode
+        '''
+        
+        # check mode
+        mode_dict = ''
+        if args.do_train:
+            mode_dict = 'train_'
+        elif args.do_valid:
+            mode_dict = 'valid_'
+        elif args.do_test:
+            mode_dict = 'test_'
+        
+        # export location
+        export_location = os.path.join(args.init_checkpoint, mode_dict+'scores.tsv')
+        
+        #write
+        df.to_csv(export_location, header= False, index = False, sep = '\t')
+

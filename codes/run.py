@@ -237,6 +237,9 @@ def main(args):
     
     if args.do_train:
         # Set training dataloader iterator
+        # Set global random seed
+        #np.random.seed(2021)
+        #np.random.seed()
         train_dataloader_head = DataLoader(
             TrainDataset(train_triples, nentity, nrelation, args.negative_sample_size, 'head-batch'), 
             batch_size=args.batch_size,
@@ -330,10 +333,10 @@ def main(args):
                 log_metrics('Training average', step, metrics)
                 training_logs = []
                 
-            if args.do_valid and step % args.valid_steps == 0:
-                logging.info('Evaluating on Valid Dataset...')
-                metrics = kge_model.test_step(kge_model, valid_triples, all_true_triples, args)
-                log_metrics('Valid', step, metrics)
+            # if args.do_valid and step % args.valid_steps == 0 and step!=0:
+            #     logging.info('Evaluating on Valid Dataset...')
+            #     metrics = kge_model.test_step(kge_model, valid_triples, all_true_triples, args)
+            #     log_metrics('Valid', step, metrics)
         
         save_variable_list = {
             'step': step, 
@@ -351,7 +354,7 @@ def main(args):
         logging.info('Evaluating on Test Dataset...')
         metrics = kge_model.test_step(kge_model, test_triples, all_true_triples, args)
         log_metrics('Test', step, metrics)
-    
+
     if args.evaluate_train:
         logging.info('Evaluating on Training Dataset...')
         metrics = kge_model.test_step(kge_model, train_triples, all_true_triples, args)
