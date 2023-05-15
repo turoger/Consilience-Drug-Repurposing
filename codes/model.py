@@ -414,12 +414,12 @@ class KGEModel(nn.Module):
                         
                         if mode == 'head-batch':
                             positive_arg = positive_sample[:, 0]
-                            if args.do_test or args.do_predict:
+                            if args.do_test or args.do_valid or args.do_predict:
                                 KGEModel.make_raw_scores_df(score, positive_sample, mode, args)
 
                         elif mode == 'tail-batch':
                             positive_arg = positive_sample[:, 2]
-                            if args.do_test or args.do_predict:
+                            if args.do_test or args.do_valid or args.do_predict:
                                 KGEModel.make_raw_scores_df(score, positive_sample, mode, args)
 
                         else:

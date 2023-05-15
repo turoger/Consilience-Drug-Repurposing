@@ -31,6 +31,7 @@ def parse_args(args=None):
     parser.add_argument('--do_train', action='store_true')
     parser.add_argument('--do_valid', action='store_true')
     parser.add_argument('--do_test', action='store_true')
+    parser.add_argument('--do_predict', action='store_true')
     parser.add_argument('--evaluate_train', action='store_true', help='Evaluate on training data')
     
     parser.add_argument('--countries', action='store_true', help='Use Countries S1/S2/S3 datasets')
