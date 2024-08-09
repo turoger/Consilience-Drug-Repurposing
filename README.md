@@ -1,5 +1,5 @@
-# Drug Repositioning using Consilience of Knowledge Graph Completion Methods
-This repository is a fork of [Sun et. al](https://openreview.net/forum?id=HkgEQnRqYQ) implementation of four knowledge graph embedding models. Here we apply the aforementioned algorithms to a biomedical knowledge graph called MIND ([**M**echRepoNet](https://github.com/SuLab/MechRepoNet) with [DrugCentral](https://drugcentral.org/) **ind**ications). We report the results of our analysis in this [preprint](https://www.biorxiv.org/content/10.1101/2023.05.12.540594v1).
+# Drug Repuprosing using Consilience of Knowledge Graph Completion Methods
+This repository is a fork of [Sun et. al](https://openreview.net/forum?id=HkgEQnRqYQ) implementation of four knowledge graph embedding models. Here we apply the aforementioned algorithms to a biomedical knowledge graph called MIND ([**M**echRepoNet](https://github.com/SuLab/MechRepoNet) with [DrugCentral](https://drugcentral.org/) **ind**ications). We report the results of our analysis in this [preprint](https://www.biorxiv.org/content/10.1101/2023.05.12.540594v3).
 
 ## Modifications to the original repository
 * Added code to output raw embeddings in order to extract predictions. This can be seen with the `--do_predict` flag in `codes/run.py`.
@@ -8,7 +8,7 @@ This repository is a fork of [Sun et. al](https://openreview.net/forum?id=HkgEQn
 
 ## Usage instructions
 1. Please see the original PyTorch implementation instructions
-2. Download the [MIND dataset](https://tobehostedsomewhere) to `./data`
+2. Download the [MIND dataset](https://zenodo.org/records/8117748) to `./data`
 3. Install requirements into python virtual environment
    ```
    # run in shell
