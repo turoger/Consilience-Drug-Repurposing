@@ -12,10 +12,9 @@ This repository is a fork of [Sun et. al](https://openreview.net/forum?id=HkgEQn
 3. Install requirements into python virtual environment
    ```
    # run in shell
-   python3 -m venv <virtual_env_name_here>
-   source virtual_env_name_here/bin/activate
-   python -m pip install --upgrade pip
-   pip install -r requirements.txt
+   mamba create -f environment.yml
+   mamba activate kge
+   
    ``` 
 5. Train/Test
    ```
