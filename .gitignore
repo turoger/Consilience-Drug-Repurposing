@@ -1,3 +1,9 @@
 checkpoint
 *.npy
 *.log
+
+# data
+data/MIND/
+
+# kge
+kge/models/*
