@@ -9,16 +9,15 @@ This repository is a fork of [Sun et. al](https://openreview.net/forum?id=HkgEQn
 ## Usage instructions
 1. Please see the original PyTorch implementation instructions
 2. Download the [MIND dataset](https://zenodo.org/records/8117748) to `./data` with
-```bash
+   ```bash
    # run in shell
    bash download.sh
-```
+   ```
 3. Install requirements into python virtual environment
    ```bash
    # run in shell
    mamba create -f environment.yml
    mamba activate kge
-   
    ``` 
 4. Run notebooks in `./Notebooks`
 
