@@ -140,19 +140,23 @@ class ProcessOutput(object):
         ), 'Item must be a list of integers. DataFrame needs to have "format_raw_scores_to_df()" run first'
 
         # read in files
-        entity_df = pl.DataFrame(
-            pd.read_csv(
+        entity_df = (
+            pl.read_csv(
                 os.path.join(data_dir, "entities.dict"),
-                sep="\t",
-                names=["emb", "identifier"],
+                separator="\t",
+                has_header=False,
             )
+            .rename({"column_1": "emb", "column_2": "identifier"})
+            .with_columns(pl.col("emb").cast(pl.String))
         )
-        relation_df = pl.DataFrame(
-            pd.read_csv(
+        relation_df = (
+            pl.read_csv(
                 os.path.join(data_dir, "relations.dict"),
-                sep="\t",
-                names=["emb", "identifier"],
+                separator="\t",
+                has_header=False,
             )
+            .rename({"column_1": "emb", "column_2": "identifier"})
+            .with_columns(pl.col("emb").cast(pl.String))
         )
 
         # process the options
@@ -169,9 +173,9 @@ class ProcessOutput(object):
 
         for col in df.columns:
             if col == "h" or col == "t":
-                df = df.with_columns(pl.col(col).replace(entity_dict))
+                df = df.with_columns(pl.col(col).cast(pl.String).replace(entity_dict))
             elif col == "r":
-                df = df.with_columns(pl.col(col).replace(relation_dict))
+                df = df.with_columns(pl.col(col).cast(pl.String).replace(relation_dict))
             elif col == "preds":
                 df = (
                     df.explode(col)
@@ -199,50 +203,68 @@ class ProcessOutput(object):
         # check if df is embedding or obj. if embedding, convert to obj
         df = self.df
 
-        for col in df.columns:
-            if df[col].dtype != "O":
+        for col in df.dtypes:
+            if (col == pl.List(pl.String)) or (col == pl.String):
+                next
+            else:
                 df = self.translate_embeddings(direction="from")
                 break
 
         if self.mode == "tail-batch":
             # get true targets and merge into dataframe
             target_df_tail = self.get_true_targets()
-            df = df.drop(columns=["t"])
-            df = df.merge(target_df_tail, on=["h", "r"], how="left")
+            df = df.drop("t")
+            df = df.join(target_df_tail, on=["h", "r"], how="left")
             # fillna with empty list if empty
-            df["t"].iloc[df[["t"]].isnull().query("t==True").index] = (
-                df["t"]
-                .iloc[df[["t"]].isnull().query("t==True").index]
-                .apply(lambda x: [])
+            df = df.with_columns(pl.col("t").fill_null([])).rename({"t": "true_t"})
+            # filter out predictions that are in the true values and in 't'
+            df = df.with_columns(
+                (
+                    pl.col("true_t").list.concat(pl.col("h").cast(pl.List(pl.String)))
+                ).alias("toremove")
             )
-            df["filt_preds"] = df.apply(
-                lambda i: self.remove_list_from_list(i["preds"], i["t"]), axis=1
-            )
-            df = df.rename(columns={"t": "true_t"})
-            df["filt_preds"] = df.apply(
-                lambda i: self.remove_list_from_list(i["filt_preds"], i["h"]), axis=1
+            df = (
+                df.with_columns(
+                    pl.struct([pl.col("preds"), pl.col("toremove")]).alias("filt_preds")
+                )
+                .with_columns(
+                    pl.col("filt_preds").map_elements(
+                        lambda x: self.remove_list_from_list(x["preds"], x["toremove"]),
+                        return_dtype=pl.List(pl.String),
+                    )
+                )
+                .drop("toremove")
             )
 
         elif self.mode == "head-batch":
             target_df_head = self.get_true_targets()
-            df = df.drop(columns=["h"])
-            df = df.merge(target_df_head, on=["r", "t"], how="left")
+            df = df.drop(["h"])
+            df = df.join(target_df_tail, on=["r", "t"], how="left")
             # fillna with empty list if empty
-            df["h"].iloc[df[["h"]].isnull().query("h==True").index] = (
-                df["h"]
-                .iloc[df[["h"]].isnull().query("h==True").index]
-                .apply(lambda x: [])
+            df = df.with_columns(pl.col("h").fill_null([])).rename({"h": "true_h"})
+
+            # filter out predictions that are in the true values and in 'h'
+            # first create new column to remove from
+            df = df.with_columns(
+                (
+                    pl.col("true_h").list.concat(pl.col("t").cast(pl.List(pl.String)))
+                ).alias("toremove")
             )
-            df["filt_preds"] = df.apply(
-                lambda i: self.remove_list_from_list(i["preds"], i["h"]), axis=1
-            )
-            df = df.rename(columns={"h": "true_h"})
-            df["filt_preds"] = df.apply(
-                lambda i: self.remove_list_from_list(i["filt_preds"], i["t"]), axis=1
+            df = (
+                df.with_columns(
+                    pl.struct([pl.col("preds"), pl.col("toremove")]).alias("filt_preds")
+                )
+                .with_columns(
+                    pl.col("filt_preds").map_elements(
+                        lambda x: self.remove_list_from_list(x["preds"], x["toremove"]),
+                        return_dtype=pl.List(pl.String),
+                    )
+                )
+                .drop("toremove")
             )
 
         # get the top number of predictions
-        df["filt_preds"] = df["filt_preds"].apply(lambda x: x[0:top])
+        df = df.with_columns(pl.col("filt_preds").list.head(top))
 
         return df
 
@@ -262,10 +284,13 @@ class ProcessOutput(object):
             # check if true values has been extracted, if not, extract and merge
             if "true_t" not in df.columns:
                 target_df_tail = self.get_true_targets()
-                df = df.rename(columns={"t": "target"})
-                df = df.merge(target_df_tail, on=["h", "r"], how="left")
-                df = df.rename(columns={"t": "true_t"})
-
+                df = df.rename({"t": "target"})
+                df.join(target_df_tail, on=["h", "r"], how="left").rename(
+                    {"t": "true_t"}
+                )
+                # df = df.merge(target_df_tail, on=["h", "r"], how="left")
+                # df = df.rename(columns={"t": "true_t"})
+            # mark_list_from_list is broken
             df["position"] = df.apply(
                 lambda x: self.mark_list_from_list(x["preds"], x["true_t"]), axis=1
             )
@@ -274,9 +299,12 @@ class ProcessOutput(object):
             # check if true values has been extracted, if not, extract and merge
             if "true_h" not in df.columns:
                 target_df_head = self.get_true_targets()
-                df = df.rename(columns={"h": "target"})
-                df = df.merge(target_df_head, on=["r", "t"], how="left")
-                df = df.rename(columns={"h": "true_h"})
+                df = df.rename({"h": "target"})
+                df.join(target_df_head, on=["r", "t"], how="left").rename(
+                    {"h": "true_h"}
+                )
+                # df = df.merge(target_df_head, on=["r", "t"], how="left")
+                # df = df.rename(columns={"h": "true_h"})
 
             df["position"] = df.apply(
                 lambda x: self.mark_list_from_list(x["preds"], x["true_h"]), axis=1
