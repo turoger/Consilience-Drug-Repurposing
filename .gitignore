@@ -2,8 +2,11 @@ checkpoint
 *.npy
 *.log
 
+# Notebooks
+Notebooks/__pycache__/
 # data
 data/MIND/
 
 # kge
 kge/models/*
+kge/codes/__pycache__/

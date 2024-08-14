@@ -1,10 +1,6 @@
 # Drug Repurposing using Consilience of Knowledge Graph Completion Methods
-This repository is a fork of [Sun et. al](https://openreview.net/forum?id=HkgEQnRqYQ) implementation of four knowledge graph embedding models. Here we apply the aforementioned algorithms to a biomedical knowledge graph called MIND ([**M**echRepoNet](https://github.com/SuLab/MechRepoNet) with [DrugCentral](https://drugcentral.org/) **ind**ications). We report the results of our analysis in this [preprint](https://www.biorxiv.org/content/10.1101/2023.05.12.540594v3).
+This repository leverages seven knowledge graph completion algorithms (four embedding, three path-based) to make drug repurposing predictions on a biomedical knowledge graph called MIND ([<ins>M</ins>echRepoNet](https://github.com/SuLab/MechRepoNet) with [DrugCentral](https://drugcentral.org/) <ins>ind</ins>ications). We report the results of our analysis in this [preprint](https://www.biorxiv.org/content/10.1101/2023.05.12.540594v3).
 
-## Modifications to the original repository
-* Added code to output raw embeddings in order to extract predictions. This can be seen with the `--do_predict` flag in `kge/codes/run.py`.
-* Added Notebooks folder that encapsulates analysis done on the MIND dataset.
-* Added methods, `Notebooks/score_utils.py`, to process and translate raw embeddings into human readable entities and relations.
 
 ## Usage instructions
 1. Please see the original PyTorch implementation instructions
@@ -20,6 +16,15 @@ This repository is a fork of [Sun et. al](https://openreview.net/forum?id=HkgEQn
    mamba activate kge
    ``` 
 4. Run notebooks in `./Notebooks`
+
+## Modifications Summary
+### Knowledge Graph Embedding repository
+* Added code to output raw embeddings in order to extract predictions. This can be done with the `--do_predict` flag in `kge/codes/run.py`.
+* Added Notebooks folder that encapsulates analysis done on the MIND dataset.
+* Added methods, `Notebooks/score_utils.py`, to process and translate raw embeddings into human readable entities and relations.
+
+### Case-based Reasoning
+* TBA
 
 ## Citation
 
