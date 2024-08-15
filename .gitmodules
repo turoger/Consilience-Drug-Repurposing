@@ -1,0 +1,6 @@
+[submodule "path-based/CBR-AKBC"]
+	path = path-based/CBR-AKBC
+	url = git@github.com:rajarshd/CBR-AKBC.git
+[submodule "path-based/Prob-CBR"]
+	path = path-based/Prob-CBR
+	url = git@github.com:ameyagodbole/Prob-CBR.git
