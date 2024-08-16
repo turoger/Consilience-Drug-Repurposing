@@ -1,38 +1,66 @@
 import argparse
-import numpy as np
-import os
-from tqdm import tqdm
-from collections import defaultdict, deque
-import pickle
-import torch
-from code.data.data_utils import create_vocab, load_data, get_unique_entities, \
-    read_graph, get_entities_group_by_relation, get_inv_relation, load_data_all_triples
-from typing import *
-import logging
 import json
+import logging
+import os
+import pickle
 import sys
-import wandb
+from collections import defaultdict, deque
+
+# from code.data.data_utils import create_vocab, load_data, get_unique_entities, \
+#     read_graph, get_entities_group_by_relation, get_inv_relation, load_data_all_triples
+from typing import *
+
+import numpy as np
+import torch
+from data.data_utils import (
+    create_vocab,
+    get_entities_group_by_relation,
+    get_inv_relation,
+    get_unique_entities,
+    load_data,
+    load_data_all_triples,
+    read_graph,
+)
+from tqdm import tqdm
+
 torch.cuda.empty_cache()
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 ch = logging.StreamHandler()
 ch.setLevel(logging.INFO)
-formatter = logging.Formatter("[%(asctime)s \t %(message)s]",
-                              "%Y-%m-%d %H:%M:%S")
+formatter = logging.Formatter("[%(asctime)s \t %(message)s]", "%Y-%m-%d %H:%M:%S")
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
 
 class CBR(object):
-    def __init__(self, args,full_map, train_map, eval_map, entity_vocab, rev_entity_vocab, rel_vocab, rev_rel_vocab, eval_vocab,
-                 eval_rev_vocab, all_paths, rel_ent_map):
+    def __init__(
+        self,
+        args,
+        full_map,
+        train_map,
+        eval_map,
+        entity_vocab,
+        rev_entity_vocab,
+        rel_vocab,
+        rev_rel_vocab,
+        eval_vocab,
+        eval_rev_vocab,
+        all_paths,
+        rel_ent_map,
+    ):
         self.args = args
         self.eval_map = eval_map
         self.train_map = train_map
         self.full_map = full_map
         self.all_zero_ctr = []
         self.all_num_ret_nn = []
-        self.entity_vocab, self.rev_entity_vocab, self.rel_vocab, self.rev_rel_vocab = entity_vocab, rev_entity_vocab, rel_vocab, rev_rel_vocab
+        self.entity_vocab, self.rev_entity_vocab, self.rel_vocab, self.rev_rel_vocab = (
+            entity_vocab,
+            rev_entity_vocab,
+            rel_vocab,
+            rev_rel_vocab,
+        )
         self.eval_vocab, self.eval_rev_vocab = eval_vocab, eval_rev_vocab
         self.all_paths = all_paths
         self.rel_ent_map = rel_ent_map
@@ -42,7 +70,9 @@ class CBR(object):
         self.nearest_neighbor_1_hop = nearest_neighbor_1_hop
 
     @staticmethod
-    def calc_sim(adj_mat: Type[torch.Tensor], query_entities: Type[torch.LongTensor]) -> Type[torch.LongTensor]:
+    def calc_sim(
+        adj_mat: Type[torch.Tensor], query_entities: Type[torch.LongTensor]
+    ) -> Type[torch.LongTensor]:
         """
         :param adj_mat: N X R
         :param query_entities: b is a batch of indices of query entities
@@ -52,10 +82,14 @@ class CBR(object):
         sim = torch.matmul(query_entities_vec, torch.t(adj_mat))
         return sim
 
-    def get_nearest_neighbor_inner_product(self, e1: str, r: str, k: Optional[int] = 5) -> List[str]:
+    def get_nearest_neighbor_inner_product(
+        self, e1: str, r: str, k: Optional[int] = 5
+    ) -> List[str]:
         try:
-            nearest_entities = [self.rev_entity_vocab[e] for e in
-                                self.nearest_neighbor_1_hop[self.eval_vocab[e1]].tolist()]
+            nearest_entities = [
+                self.rev_entity_vocab[e]
+                for e in self.nearest_neighbor_1_hop[self.eval_vocab[e1]].tolist()
+            ]
             # remove e1 from the set of k-nearest neighbors if it is there.
             nearest_entities = [nn for nn in nearest_entities if nn != e1]
             # making sure, that the similar entities also have the query relation
@@ -81,10 +115,14 @@ class CBR(object):
             for l, (r, e_dash) in enumerate(path):
                 if e_dash == ans:
                     # get the path till this point
-                    all_programs.append([x for (x, _) in path[:l + 1]])  # we only need to keep the relations
+                    all_programs.append(
+                        [x for (x, _) in path[: l + 1]]
+                    )  # we only need to keep the relations
         return all_programs
 
-    def get_programs_from_nearest_neighbors(self, e1: str, r: str, nn_func: Callable, num_nn: Optional[int] = 5):
+    def get_programs_from_nearest_neighbors(
+        self, e1: str, r: str, nn_func: Callable, num_nn: Optional[int] = 5
+    ):
         all_programs = []
         nearest_entities = nn_func(e1, r, k=num_nn)
         if nearest_entities is None:
@@ -130,13 +168,17 @@ class CBR(object):
             return []
         if len(next_entities) > max_branch:
             # select max_branch random entities
-            next_entities = np.random.choice(next_entities, max_branch, replace=False).tolist()
+            next_entities = np.random.choice(
+                next_entities, max_branch, replace=False
+            ).tolist()
         answers = []
         for e_next in next_entities:
             answers += self.execute_one_program(e_next, path, depth + 1, max_branch)
         return answers
 
-    def execute_programs(self, e: str, path_list: List[List[str]], max_branch: Optional[int] = 1000) -> List[str]:
+    def execute_programs(
+        self, e: str, path_list: List[List[str]], max_branch: Optional[int] = 1000
+    ) -> List[str]:
 
         all_answers = []
         not_executed_paths = []
@@ -163,19 +205,23 @@ class CBR(object):
         while len(q):
             e1, depth, path = q.popleft()
             if depth == len(program):
-                solutions[e1].append(path + [(self.entity_vocab[e1],
-                                              len(self.rel_vocab))])
+                solutions[e1].append(
+                    path + [(self.entity_vocab[e1], len(self.rel_vocab))]
+                )
                 continue
             rel = program[depth]
             next_entities = self.full_map[e1, rel]
             if len(next_entities) > max_branch:
-                next_entities = np.random.choice(next_entities, max_branch,
-                                                 replace=False)
+                next_entities = np.random.choice(
+                    next_entities, max_branch, replace=False
+                )
             depth += 1
             for e2 in next_entities:
-                q.append((e2, depth, path + [(self.entity_vocab[e1],
-                                              self.rel_vocab[rel])]))
+                q.append(
+                    (e2, depth, path + [(self.entity_vocab[e1], self.rel_vocab[rel])])
+                )
         return solutions
+
     def get_entity_programs(self, e1, programs):
         programs_to_entity = defaultdict(list)
         for p in programs:
@@ -204,7 +250,9 @@ class CBR(object):
                 return i + 1
         return -1
 
-    def get_hits(self, list_answers: List[str], gold_answers: List[str], query: Tuple[str, str]) -> Tuple[float, float, float, float]:
+    def get_hits(
+        self, list_answers: List[str], gold_answers: List[str], query: Tuple[str, str]
+    ) -> Tuple[float, float, float, float]:
         hits_1 = 0.0
         hits_3 = 0.0
         hits_5 = 0.0
@@ -247,25 +295,23 @@ class CBR(object):
     def do_symbolic_case_based_reasoning(self):
         num_programs = []
         num_answers = []
-        answers_list =[]
+        answers_list = []
         all_acc = []
         non_zero_ctr = 0
         hits_10, hits_5, hits_3, hits_1, mrr = 0.0, 0.0, 0.0, 0.0, 0.0
         per_relation_scores = {}  # map of performance per relation
         per_relation_query_count = {}
         total_examples = 0
-        learnt_programs = defaultdict(lambda: defaultdict(int))  # for each query relation, a map of programs to count
+        learnt_programs = defaultdict(
+            lambda: defaultdict(int)
+        )  # for each query relation, a map of programs to count
 
         all_data = []
         for _, ((e1, r), e2_list) in enumerate(tqdm((self.eval_map.items()))):
             # if e2_list is in train list then remove them
             # Normally, this shouldnt happen at all, but this happens for Nell-995.
 
-            query_data = {
-                'e1': e1,
-                'r': r,
-                'answers': e2_list
-            }
+            query_data = {"e1": e1, "r": r, "answers": e2_list}
             orig_train_e2_list = self.train_map[(e1, r)]
             temp_train_e2_list = []
             for e2 in orig_train_e2_list:
@@ -287,7 +333,7 @@ class CBR(object):
                 self.train_map[e2, r_inv] = temp_list
 
             total_examples += len(e2_list)
-         
+
             if e1 not in self.entity_vocab:
                 all_acc += [0.0] * len(e2_list)
                 # put it back
@@ -295,12 +341,16 @@ class CBR(object):
                 for e2 in e2_list:
                     self.train_map[(e2, r_inv)] = temp_map[(e2, r_inv)]
                 continue  # this entity was not seen during train; skip?
-            #self.c = self.args.cluster_assignments[self.entity_vocab[e1]]
-            num_nn_for_r = self.args.k_adj if self.per_relation_config is None else self.per_relation_config[r]["k_adj"]
-            
-           
-            all_programs = self.get_programs_from_nearest_neighbors(e1, r, self.get_nearest_neighbor_inner_product,
-                                                                    num_nn=num_nn_for_r)
+            # self.c = self.args.cluster_assignments[self.entity_vocab[e1]]
+            num_nn_for_r = (
+                self.args.k_adj
+                if self.per_relation_config is None
+                else self.per_relation_config[r]["k_adj"]
+            )
+
+            all_programs = self.get_programs_from_nearest_neighbors(
+                e1, r, self.get_nearest_neighbor_inner_product, num_nn=num_nn_for_r
+            )
             for p in all_programs:
                 if p[0] == r:
                     continue
@@ -309,8 +359,8 @@ class CBR(object):
                 p = tuple(p)
                 if p not in learnt_programs[r]:
                     learnt_programs[r][p] = 0
-                learnt_programs[r][p] += 1         
-                
+                learnt_programs[r][p] += 1
+
             # filter the program if it is equal to the query relation
             temp = []
             for p in all_programs:
@@ -324,33 +374,40 @@ class CBR(object):
 
             all_uniq_programs = self.rank_programs(all_programs)
 
-            #query_data['programs'] = all_uniq_programs
+            # query_data['programs'] = all_uniq_programs
 
             for u_p in all_uniq_programs:
                 learnt_programs[r][u_p] += 1
 
             num_programs.append(len(all_uniq_programs))
             entity_paths = self.get_entity_programs(e1, all_uniq_programs)
-            query_data['entity_paths'] = dict(entity_paths)
+            query_data["entity_paths"] = dict(entity_paths)
             # Now execute the program
-            answers, not_executed_programs = self.execute_programs(e1, all_uniq_programs)
-            #print(answers)
+            answers, not_executed_programs = self.execute_programs(
+                e1, all_uniq_programs
+            )
+            # print(answers)
             answers_list.append(answers)
-            #print(answers_list)
+            # print(answers_list)
 
             answers = self.rank_answers(answers)
             answers_list.append([k[0] for k in answers])
 
-            query_data['predicted_answers'] = [(e, float(score)) for e, score
-                                               in answers][0:100]  # to save as json
+            query_data["predicted_answers"] = [
+                (e, float(score)) for e, score in answers
+            ][
+                0:100
+            ]  # to save as json
             out_file_name = os.path.join(args.output_dir, "query_data.json")
             fout = open(out_file_name, "w")
             fout.write(str(query_data))
             fout.close()
-            
+
             if len(answers) > 0:
                 acc = self.get_accuracy(e2_list, [k[0] for k in answers])
-                _10, _5, _3, _1, rr = self.get_hits([k[0] for k in answers], e2_list, query=(e1, r))
+                _10, _5, _3, _1, rr = self.get_hits(
+                    [k[0] for k in answers], e2_list, query=(e1, r)
+                )
                 hits_10 += _10
                 hits_5 += _5
                 hits_3 += _3
@@ -358,7 +415,13 @@ class CBR(object):
                 mrr += rr
                 if args.output_per_relation_scores:
                     if r not in per_relation_scores:
-                        per_relation_scores[r] = {"hits_1": 0, "hits_3": 0, "hits_5": 0, "hits_10": 0, "mrr": 0}
+                        per_relation_scores[r] = {
+                            "hits_1": 0,
+                            "hits_3": 0,
+                            "hits_5": 0,
+                            "hits_10": 0,
+                            "mrr": 0,
+                        }
                         per_relation_query_count[r] = 0
                     per_relation_scores[r]["hits_1"] += _1
                     per_relation_scores[r]["hits_3"] += _3
@@ -375,7 +438,7 @@ class CBR(object):
             for e2 in e2_list:
                 self.train_map[(e2, r_inv)] = temp_map[(e2, r_inv)]
             all_data.append(query_data)
-        #print(all_data)
+        # print(all_data)
         out_file_name = os.path.join(args.output_dir, "answer.json")
         fout = open(out_file_name, "w")
         fout.write(str(answers_list))
@@ -396,20 +459,37 @@ class CBR(object):
             fout.close()
 
         logger.info(
-            "Out of {} queries, atleast one program was returned for {} queries".format(total_examples, non_zero_ctr))
+            "Out of {} queries, atleast one program was returned for {} queries".format(
+                total_examples, non_zero_ctr
+            )
+        )
         logger.info("Avg number of programs {:3.2f}".format(np.mean(num_programs)))
-        logger.info("Avg number of answers after executing the programs: {}".format(np.mean(num_answers)))
+        logger.info(
+            "Avg number of answers after executing the programs: {}".format(
+                np.mean(num_answers)
+            )
+        )
         logger.info("Accuracy (Loose): {}".format(np.mean(all_acc)))
         logger.info("Hits@1 {}".format(hits_1 / total_examples))
         logger.info("Hits@3 {}".format(hits_3 / total_examples))
         logger.info("Hits@5 {}".format(hits_5 / total_examples))
         logger.info("Hits@10 {}".format(hits_10 / total_examples))
         logger.info("MRR {}".format(mrr / total_examples))
-        logger.info("Avg number of nn, that do not have the query relation: {}".format(
-            np.mean(self.all_zero_ctr)))
-        logger.info("Avg num of returned nearest neighbors: {:2.4f}".format(np.mean(self.all_num_ret_nn)))
-        logger.info("Avg number of programs that do not execute per query: {:2.4f}".format(
-            np.mean(self.num_non_executable_programs)))
+        logger.info(
+            "Avg number of nn, that do not have the query relation: {}".format(
+                np.mean(self.all_zero_ctr)
+            )
+        )
+        logger.info(
+            "Avg num of returned nearest neighbors: {:2.4f}".format(
+                np.mean(self.all_num_ret_nn)
+            )
+        )
+        logger.info(
+            "Avg number of programs that do not execute per query: {:2.4f}".format(
+                np.mean(self.num_non_executable_programs)
+            )
+        )
 
         if self.args.dump_paths:
             out_file_name = os.path.join(args.output_dir, "data.json")
@@ -418,32 +498,51 @@ class CBR(object):
             fout.close()
 
         if self.args.print_paths:
-            #for k, v in learnt_programs.items():
-                #logger.info("query: {}".format(k))
-                #logger.info("=====" * 2)
-                #for rel, _ in learnt_programs[k].items():
-                    #logger.info((rel, learnt_programs[k][rel]))
-                #logger.info("=====" * 2)
+            # for k, v in learnt_programs.items():
+            # logger.info("query: {}".format(k))
+            # logger.info("=====" * 2)
+            # for rel, _ in learnt_programs[k].items():
+            # logger.info((rel, learnt_programs[k][rel]))
+            # logger.info("=====" * 2)
 
             out_file_name = os.path.join(args.output_dir, "print_paths.json")
             fout = open(out_file_name, "w")
             logger.info("Writing per-relation scores to {}".format(out_file_name))
-            dict_learnt_programs = {'name': 'learnt_programs',
-                                    'list': [{'query': k,
-                                              'program':[{'list':rel,'count':learnt_programs[k][rel]} for rel, _ in learnt_programs[k].items()]}
-                                            for k, v in learnt_programs.items()]}
+            dict_learnt_programs = {
+                "name": "learnt_programs",
+                "list": [
+                    {
+                        "query": k,
+                        "program": [
+                            {"list": rel, "count": learnt_programs[k][rel]}
+                            for rel, _ in learnt_programs[k].items()
+                        ],
+                    }
+                    for k, v in learnt_programs.items()
+                ],
+            }
             fout.write(json.dumps(dict_learnt_programs, indent=4))
             fout.close()
 
-
-        if self.args.use_wandb:
-            # Log all metrics
-            wandb.log({'hits_1': hits_1 / total_examples, 'hits_3': hits_3 / total_examples,
-                       'hits_5': hits_5 / total_examples, 'hits_10': hits_10 / total_examples,
-                       'mrr': mrr / total_examples, 'total_examples': total_examples, 'non_zero_ctr': non_zero_ctr,
-                       'all_zero_ctr': self.all_zero_ctr, 'avg_num_nn': np.mean(self.all_num_ret_nn),
-                       'avg_num_prog': np.mean(num_programs), 'avg_num_ans': np.mean(num_answers),
-                       'avg_num_failed_prog': np.mean(self.num_non_executable_programs), 'acc_loose': np.mean(all_acc)})
+        # if self.args.use_wandb:
+        #     # Log all metrics
+        #     wandb.log(
+        #         {
+        #             "hits_1": hits_1 / total_examples,
+        #             "hits_3": hits_3 / total_examples,
+        #             "hits_5": hits_5 / total_examples,
+        #             "hits_10": hits_10 / total_examples,
+        #             "mrr": mrr / total_examples,
+        #             "total_examples": total_examples,
+        #             "non_zero_ctr": non_zero_ctr,
+        #             "all_zero_ctr": self.all_zero_ctr,
+        #             "avg_num_nn": np.mean(self.all_num_ret_nn),
+        #             "avg_num_prog": np.mean(num_programs),
+        #             "avg_num_ans": np.mean(num_answers),
+        #             "avg_num_failed_prog": np.mean(self.num_non_executable_programs),
+        #             "acc_loose": np.mean(all_acc),
+        #         }
+        #     )
 
 
 # def main(args):
