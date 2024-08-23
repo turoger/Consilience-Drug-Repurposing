@@ -1,0 +1,3 @@
+[submodule "path-based/FlaskAPI_ProbCBR"]
+	path = path-based/FlaskAPI_ProbCBR
+	url = git@github.com:meghasin/FlaskAPI_ProbCBR.git
