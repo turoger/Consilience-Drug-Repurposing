@@ -69,9 +69,7 @@ def get_paths(args, train_adj_list, start_node, max_len=3):
 def main(args):
     logger.info("============={}================".format(args.dataset_name))
     data_dir = os.path.join(args.data_dir, "data", args.dataset_name)
-    out_dir = os.path.join(
-        args.data_dir, "subgraphs", "unique_paths", args.dataset_name
-    )
+    out_dir = os.path.join(args.data_dir, "data", "subgraphs", args.dataset_name)
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
     args.ignore_sequential_inverse = args.ignore_sequential_inverse == 1

@@ -23,7 +23,6 @@ from data.data_utils import (
 )
 from tqdm import tqdm
 
-torch.cuda.empty_cache()
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 ch = logging.StreamHandler()
@@ -51,8 +50,8 @@ class CBR(object):
     ):
         self.args = args
         self.eval_map = eval_map
-        self.train_map = train_map
         self.full_map = full_map
+        self.train_map = train_map
         self.all_zero_ctr = []
         self.all_num_ret_nn = []
         self.entity_vocab, self.rev_entity_vocab, self.rel_vocab, self.rev_rel_vocab = (
@@ -198,37 +197,6 @@ class CBR(object):
         self.num_non_executable_programs.append(execution_fail_counter)
         return all_answers, not_executed_paths
 
-    def execute_program_ents(self, ent, program, max_branch=20):
-        q = deque()
-        solutions = defaultdict(list)
-        q.append((ent, 0, []))
-        while len(q):
-            e1, depth, path = q.popleft()
-            if depth == len(program):
-                solutions[e1].append(
-                    path + [(self.entity_vocab[e1], len(self.rel_vocab))]
-                )
-                continue
-            rel = program[depth]
-            next_entities = self.full_map[e1, rel]
-            if len(next_entities) > max_branch:
-                next_entities = np.random.choice(
-                    next_entities, max_branch, replace=False
-                )
-            depth += 1
-            for e2 in next_entities:
-                q.append(
-                    (e2, depth, path + [(self.entity_vocab[e1], self.rel_vocab[rel])])
-                )
-        return solutions
-
-    def get_entity_programs(self, e1, programs):
-        programs_to_entity = defaultdict(list)
-        for p in programs:
-            for ent, programs in self.execute_program_ents(e1, p).items():
-                programs_to_entity[ent].extend(programs)
-        return programs_to_entity
-
     def rank_answers(self, list_answers: List[str]) -> List[str]:
         """
         Different ways to re-rank answers
@@ -282,6 +250,39 @@ class CBR(object):
                 rr += 1.0 / rank
         return hits_10, hits_5, hits_3, hits_1, rr
 
+    # megha insertion
+    def execute_program_ents(self, ent, program, max_branch=20):
+        q = deque()
+        solutions = defaultdict(list)
+        q.append((ent, 0, []))
+        while len(q):
+            e1, depth, path = q.popleft()
+            if depth == len(program):
+                solutions[e1].append(
+                    path + [(self.entity_vocab[e1], len(self.rel_vocab))]
+                )
+                continue
+            rel = program[depth]
+            next_entities = self.full_map[e1, rel]
+            if len(next_entities) > max_branch:
+                next_entities = np.random.choice(
+                    next_entities, max_branch, replace=False
+                )
+            depth += 1
+            for e2 in next_entities:
+                q.append(
+                    (e2, depth, path + [(self.entity_vocab[e1], self.rel_vocab[rel])])
+                )
+        return solutions
+
+    # megha insertion
+    def get_entity_programs(self, e1, programs):
+        programs_to_entity = defaultdict(list)
+        for p in programs:
+            for ent, programs in self.execute_program_ents(e1, p).items():
+                programs_to_entity[ent].extend(programs)
+        return programs_to_entity
+
     @staticmethod
     def get_accuracy(gold_answers: List[str], list_answers: List[str]) -> List[float]:
         all_acc = []
@@ -303,7 +304,7 @@ class CBR(object):
         per_relation_query_count = {}
         total_examples = 0
         learnt_programs = defaultdict(
-            lambda: defaultdict(int)
+            lambda: defaultdict(lambda: 0)
         )  # for each query relation, a map of programs to count
 
         all_data = []
@@ -334,32 +335,40 @@ class CBR(object):
 
             total_examples += len(e2_list)
 
+            ## if entity not seen during train; skip?
             if e1 not in self.entity_vocab:
                 all_acc += [0.0] * len(e2_list)
                 # put it back
                 self.train_map[(e1, r)] = orig_train_e2_list
                 for e2 in e2_list:
                     self.train_map[(e2, r_inv)] = temp_map[(e2, r_inv)]
-                continue  # this entity was not seen during train; skip?
-            # self.c = self.args.cluster_assignments[self.entity_vocab[e1]]
+                # continue
+
+            ##
             num_nn_for_r = (
-                self.args.k_adj
-                if self.per_relation_config is None
-                else self.per_relation_config[r]["k_adj"]
+                args.k_adj
+                if args.per_relation_config is None
+                else args.per_relation_config[r]["k_adj"]
             )
 
             all_programs = self.get_programs_from_nearest_neighbors(
-                e1, r, self.get_nearest_neighbor_inner_product, num_nn=num_nn_for_r
+                e1, r, self.get_nearest_neighbor_inner_product, num_nn=self.args.k_adj
             )
-            for p in all_programs:
-                if p[0] == r:
-                    continue
-                if r not in learnt_programs:
-                    learnt_programs[r] = {}
-                p = tuple(p)
-                if p not in learnt_programs[r]:
-                    learnt_programs[r][p] = 0
-                learnt_programs[r][p] += 1
+            ## we really don't need this if we have a default dict..
+            # for p in all_programs:
+            #     if p[0] == r: # throws out any program starting with 'indication'
+            #         continue
+            #     if r not in learnt_programs:
+            #         learnt_programs[r] = {}
+            #     p = tuple(p)
+            #     if p not in learnt_programs[r]:
+            #         learnt_programs[r][p] = 0
+            #     else:
+            #         learnt_programs[r][p] += 1
+            ## og implementation
+            # if all_programs is None or len(all_programs) == 0:
+            #     all_acc.append(0.0)
+            #     continue
 
             # filter the program if it is equal to the query relation
             temp = []
@@ -374,34 +383,33 @@ class CBR(object):
 
             all_uniq_programs = self.rank_programs(all_programs)
 
-            # query_data['programs'] = all_uniq_programs
-
             for u_p in all_uniq_programs:
                 learnt_programs[r][u_p] += 1
 
             num_programs.append(len(all_uniq_programs))
+            ##
             entity_paths = self.get_entity_programs(e1, all_uniq_programs)
             query_data["entity_paths"] = dict(entity_paths)
+
             # Now execute the program
             answers, not_executed_programs = self.execute_programs(
                 e1, all_uniq_programs
             )
-            # print(answers)
-            answers_list.append(answers)
-            # print(answers_list)
-
+            answers_list.append(answers)  ##
             answers = self.rank_answers(answers)
             answers_list.append([k[0] for k in answers])
 
             query_data["predicted_answers"] = [
                 (e, float(score)) for e, score in answers
-            ][
-                0:100
-            ]  # to save as json
-            out_file_name = os.path.join(args.output_dir, "query_data.json")
-            fout = open(out_file_name, "w")
-            fout.write(str(query_data))
-            fout.close()
+            ][0 : args.max_answers]
+
+            # output the query predictions if set to True
+            if args.output_predictions:
+                prediction_out = os.path.join(
+                    args.output_dir, f"{args.dataset_name}_CBR_query_data.json"
+                )
+                with open(prediction_out, "w") as fout:
+                    fout.write(json.dumps(query_data, indent=4))
 
             if len(answers) > 0:
                 acc = self.get_accuracy(e2_list, [k[0] for k in answers])
@@ -437,12 +445,6 @@ class CBR(object):
             self.train_map[(e1, r)] = orig_train_e2_list
             for e2 in e2_list:
                 self.train_map[(e2, r_inv)] = temp_map[(e2, r_inv)]
-            all_data.append(query_data)
-        # print(all_data)
-        out_file_name = os.path.join(args.output_dir, "answer.json")
-        fout = open(out_file_name, "w")
-        fout.write(str(answers_list))
-        fout.close()
 
         if args.output_per_relation_scores:
             for r, r_scores in per_relation_scores.items():
@@ -451,8 +453,9 @@ class CBR(object):
                 r_scores["hits_5"] /= per_relation_query_count[r]
                 r_scores["hits_10"] /= per_relation_query_count[r]
                 r_scores["mrr"] /= per_relation_query_count[r]
-
-            out_file_name = os.path.join(args.output_dir, "per_relation_scores.json")
+            out_file_name = os.path.join(
+                args.output_dir, f"{args.dataset_name}_CBR_per_relation_scores.json"
+            )
             fout = open(out_file_name, "w")
             logger.info("Writing per-relation scores to {}".format(out_file_name))
             fout.write(json.dumps(per_relation_scores, sort_keys=True, indent=4))
@@ -490,171 +493,184 @@ class CBR(object):
                 np.mean(self.num_non_executable_programs)
             )
         )
-
-        if self.args.dump_paths:
-            out_file_name = os.path.join(args.output_dir, "data.json")
-            fout = open(out_file_name, "w")
-            fout.write(json.dumps(all_data, indent=4))
-            fout.close()
-
         if self.args.print_paths:
-            # for k, v in learnt_programs.items():
-            # logger.info("query: {}".format(k))
-            # logger.info("=====" * 2)
-            # for rel, _ in learnt_programs[k].items():
-            # logger.info((rel, learnt_programs[k][rel]))
-            # logger.info("=====" * 2)
-
-            out_file_name = os.path.join(args.output_dir, "print_paths.json")
-            fout = open(out_file_name, "w")
-            logger.info("Writing per-relation scores to {}".format(out_file_name))
-            dict_learnt_programs = {
-                "name": "learnt_programs",
-                "list": [
-                    {
-                        "query": k,
-                        "program": [
-                            {"list": rel, "count": learnt_programs[k][rel]}
-                            for rel, _ in learnt_programs[k].items()
-                        ],
-                    }
-                    for k, v in learnt_programs.items()
-                ],
-            }
-            fout.write(json.dumps(dict_learnt_programs, indent=4))
-            fout.close()
-
-        # if self.args.use_wandb:
-        #     # Log all metrics
-        #     wandb.log(
-        #         {
-        #             "hits_1": hits_1 / total_examples,
-        #             "hits_3": hits_3 / total_examples,
-        #             "hits_5": hits_5 / total_examples,
-        #             "hits_10": hits_10 / total_examples,
-        #             "mrr": mrr / total_examples,
-        #             "total_examples": total_examples,
-        #             "non_zero_ctr": non_zero_ctr,
-        #             "all_zero_ctr": self.all_zero_ctr,
-        #             "avg_num_nn": np.mean(self.all_num_ret_nn),
-        #             "avg_num_prog": np.mean(num_programs),
-        #             "avg_num_ans": np.mean(num_answers),
-        #             "avg_num_failed_prog": np.mean(self.num_non_executable_programs),
-        #             "acc_loose": np.mean(all_acc),
-        #         }
-        #     )
+            for k, v in learnt_programs.items():
+                logger.info("query: {}".format(k))
+                logger.info("=====" * 2)
+                for rel, _ in learnt_programs[k].items():
+                    logger.info((rel, learnt_programs[k][rel]))
+                logger.info("=====" * 2)
+        if self.args.use_wandb:
+            # Log all metrics
+            wandb.log(
+                {
+                    "hits_1": hits_1 / total_examples,
+                    "hits_3": hits_3 / total_examples,
+                    "hits_5": hits_5 / total_examples,
+                    "hits_10": hits_10 / total_examples,
+                    "mrr": mrr / total_examples,
+                    "total_examples": total_examples,
+                    "non_zero_ctr": non_zero_ctr,
+                    "all_zero_ctr": self.all_zero_ctr,
+                    "avg_num_nn": np.mean(self.all_num_ret_nn),
+                    "avg_num_prog": np.mean(num_programs),
+                    "avg_num_ans": np.mean(num_answers),
+                    "avg_num_failed_prog": np.mean(self.num_non_executable_programs),
+                    "acc_loose": np.mean(all_acc),
+                }
+            )
 
 
-# def main(args):
-#     dataset_name = args.dataset_name
-#     logger.info("==========={}============".format(dataset_name))
-#     data_dir = os.path.join(args.data_dir, "data", dataset_name)
-#     #output_dir = "./results"
-#     subgraph_dir = os.path.join(args.data_dir, "subgraphs", dataset_name)
-#     kg_file = os.path.join(data_dir, "graph.txt")
+def main(args):
+    dataset_name = args.dataset_name
+    logger.info("==========={}============".format(dataset_name))
+    data_dir = os.path.join(args.data_dir, "data", dataset_name)
+    subgraph_dir = os.path.join(args.data_dir, "data", "subgraphs", dataset_name)
+    kg_file = os.path.join(data_dir, "graph.txt")
 
-#     args.dev_file = os.path.join(data_dir, "dev.txt")
-#     args.test_file = os.path.join(data_dir, "test.txt") if not args.test_file_name \
-#         else os.path.join(data_dir, args.test_file_name)
-#     if args.dataset_name == "FB122":
-#         args.test_file = os.path.join(data_dir, "testI.txt")
+    args.dev_file = os.path.join(data_dir, "dev.txt")
+    args.test_file = (
+        os.path.join(data_dir, "test.txt")
+        if not args.test_file_name
+        else os.path.join(data_dir, args.test_file_name)
+    )
+    if args.dataset_name == "FB122":
+        args.test_file = os.path.join(data_dir, "testI.txt")
 
-#     args.train_file = os.path.join(data_dir, "train.txt")
+    args.train_file = os.path.join(data_dir, "train.txt")
 
-#     logger.info("Loading subgraph around entities:")
-#     with open(os.path.join(subgraph_dir, args.subgraph_file_name), "rb") as fin:
-#         all_paths = pickle.load(fin)
+    logger.info("Loading subgraph around entities:")
+    with open(os.path.join(subgraph_dir, args.subgraph_file_name), "rb") as fin:
+        all_paths = pickle.load(fin)
 
-#     entity_vocab, rev_entity_vocab, rel_vocab, rev_rel_vocab = create_vocab(kg_file)
-#     logger.info("Loading train map")
-#     full_map = load_data(kg_file)
-#     train_map = load_data(args.train_file)
-#     logger.info("Loading dev map")
-#     dev_map = load_data(args.dev_file)
-#     logger.info("Loading test map")
-#     test_map = load_data(args.test_file)
-#     eval_map = dev_map
-#     eval_file = args.dev_file
-#     if args.test:
-#         eval_map = test_map
-#         eval_file = args.test_file
+    entity_vocab, rev_entity_vocab, rel_vocab, rev_rel_vocab = create_vocab(kg_file)
+    logger.info("Loading train map")
+    full_map = load_data(kg_file)
+    train_map = load_data(args.train_file)
+    logger.info("Loading dev map")
+    dev_map = load_data(args.dev_file)
+    logger.info("Loading test map")
+    test_map = load_data(args.test_file)
+    eval_map = dev_map
+    eval_file = args.dev_file
+    if args.test:
+        eval_map = test_map
+        eval_file = args.test_file
 
-#     rel_ent_map = get_entities_group_by_relation(args.train_file)
-#     # Calculate nearest neighbors
-#     adj_mat = read_graph(kg_file, entity_vocab, rel_vocab)
-#     adj_mat = np.sqrt(adj_mat)
-#     l2norm = np.linalg.norm(adj_mat, axis=-1)
-#     l2norm[0] += np.finfo(np.float).eps  # to encounter zero values. These 2 indx are PAD / NULL
-#     l2norm[1] += np.finfo(np.float).eps
-#     adj_mat = adj_mat / l2norm.reshape(l2norm.shape[0], 1)
+    rel_ent_map = get_entities_group_by_relation(args.train_file)
+    # Calculate nearest neighbors
+    adj_mat = read_graph(kg_file, entity_vocab, rel_vocab)
+    adj_mat = np.sqrt(adj_mat)
+    l2norm = np.linalg.norm(adj_mat, axis=-1)
+    # to encounter zero values. These 2 indx are PAD / NULL
+    l2norm[0] += np.finfo(float).eps
+    l2norm[1] += np.finfo(float).eps
+    adj_mat = adj_mat / l2norm.reshape(l2norm.shape[0], 1)
 
-#     # Lets put this to GPU
-#     adj_mat = torch.from_numpy(adj_mat)
+    # Lets put this to GPU
+    adj_mat = torch.from_numpy(adj_mat)
 
-#     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-#     print(device)
-#     logger.info('Using device:'.format(device.__str__()))
-#     adj_mat = adj_mat.to(device)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(device)
+    logger.info("Using device:".format(device.__str__()))
+    adj_mat = adj_mat.to(device)
 
-#     # get the unique entities in eval set, so that we can calculate similarity in advance.
-#     eval_entities = get_unique_entities(eval_file)
-#     eval_vocab, eval_rev_vocab = {}, {}
-#     query_ind = []
+    # get the unique entities in eval set, so that we can calculate similarity in advance.
+    eval_entities = get_unique_entities(eval_file)
+    eval_vocab, eval_rev_vocab = {}, {}
+    query_ind = []
 
-#     e_ctr = 0
-#     for e in eval_entities:
-#         try:
-#             query_ind.append(entity_vocab[e])
-#         except KeyError:
-#             continue
-#         eval_vocab[e] = e_ctr
-#         eval_rev_vocab[e_ctr] = e
-#         e_ctr += 1
+    e_ctr = 0
+    for e in eval_entities:
+        try:
+            query_ind.append(entity_vocab[e])
+        except KeyError:
+            continue
+        eval_vocab[e] = e_ctr
+        eval_rev_vocab[e_ctr] = e
+        e_ctr += 1
 
-#     logger.info("=========Config:============")
-#     logger.info(json.dumps(vars(args), indent=4, sort_keys=True))
+    logger.info("=========Config:============")
+    logger.info(json.dumps(vars(args), indent=4, sort_keys=True))
 
-#     logger.info("Loading combined train/dev/test map for filtered eval")
-#     all_kg_map = load_data_all_triples(args.train_file, args.dev_file, args.test_file)
-#     args.all_kg_map = all_kg_map
+    logger.info("Loading combined train/dev/test map for filtered eval")
+    all_kg_map = load_data_all_triples(args.train_file, args.dev_file, args.test_file)
+    args.all_kg_map = all_kg_map
 
-#     symbolically_smart_agent = CBR(args,full_map, train_map, eval_map, entity_vocab, rev_entity_vocab, rel_vocab,
-#                                                  rev_rel_vocab, eval_vocab, eval_rev_vocab, all_paths, rel_ent_map)
+    symbolically_smart_agent = CBR(
+        args,
+        full_map,
+        train_map,
+        eval_map,
+        entity_vocab,
+        rev_entity_vocab,
+        rel_vocab,
+        rev_rel_vocab,
+        eval_vocab,
+        eval_rev_vocab,
+        all_paths,
+        rel_ent_map,
+    )
 
-#     query_ind = torch.LongTensor(query_ind).to(device)
-#     # Calculate similarity
-#     adj_mat= adj_mat.cpu()
-#     query_ind =query_ind.cpu()
-#     sim = symbolically_smart_agent.calc_sim(adj_mat,
-#                                             query_ind)  # n X N (n== size of dev_entities, N: size of all entities)
+    query_ind = torch.LongTensor(query_ind).to(device)
+    # Calculate similarity
+    sim = symbolically_smart_agent.calc_sim(
+        adj_mat, query_ind
+    )  # n X N (n== size of dev_entities, N: size of all entities)
 
-#     nearest_neighbor_1_hop = np.argsort(-sim.cpu(), axis=-1)
-#     symbolically_smart_agent.set_nearest_neighbor_1_hop(nearest_neighbor_1_hop)
+    nearest_neighbor_1_hop = np.argsort(-sim.cpu(), axis=-1)
+    symbolically_smart_agent.set_nearest_neighbor_1_hop(nearest_neighbor_1_hop)
 
-#     logger.info("Loaded...")
+    logger.info("Loaded...")
 
-#     symbolically_smart_agent.do_symbolic_case_based_reasoning()
+    symbolically_smart_agent.do_symbolic_case_based_reasoning()
 
 
-# if __name__ == '__main__':
-#     parser = argparse.ArgumentParser(description="Collect subgraphs around entities")
-#     parser.add_argument("--dataset_name", type=str, help="The dataset name. Replace with one of FB122 | WN18RR | NELL-995 to reproduce the results of the paper")
-#     parser.add_argument("--data_dir", type=str, default="./cbr-akbc-data/")
-#     parser.add_argument("--output_dir", type=str, default="./results/")
-#     parser.add_argument("--subgraph_file_name", type=str,
-#                         default="paths_1000.pkl")
-#     parser.add_argument("--test", action="store_true")
-#     parser.add_argument("--test_file_name", type=str, default='')
-#     parser.add_argument("--max_num_programs", type=int, default=15, help="Max number of paths to consider")
-#     parser.add_argument("--print_paths", action="store_true", default='true')
-#     parser.add_argument("--dump_paths", action="store_true", default='true')
-#     parser.add_argument("--k_adj", type=int, default=5,
-#                         help="Number of nearest neighbors to consider based on adjacency matrix")
-#     parser.add_argument("--use_wandb", type=int, choices=[0, 1], default=0, help="Set to 1 if using W&B")
-#     parser.add_argument("--output_per_relation_scores", action="store_true", default='true')
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Collect subgraphs around entities")
+    parser.add_argument(
+        "--dataset_name",
+        type=str,
+        help="The dataset name. Replace with one of FB122 | WN18RR | NELL-995 to reproduce the results of the paper",
+    )
+    parser.add_argument("--data_dir", type=str, default="./cbr-akbc-data/")
+    parser.add_argument("--subgraph_file_name", type=str, default="paths_1000.pkl")
+    parser.add_argument("--test", action="store_true")
+    parser.add_argument("--test_file_name", type=str, default="")
+    parser.add_argument(
+        "--max_num_programs",
+        type=int,
+        default=15,
+        help="Max number of paths to consider",
+    )
+    parser.add_argument("--print_paths", action="store_true")
+    parser.add_argument(
+        "--k_adj",
+        type=int,
+        default=5,
+        help="Number of nearest neighbors to consider based on adjacency matrix",
+    )
+    parser.add_argument(
+        "--use_wandb", type=int, choices=[0, 1], default=0, help="Set to 1 if using W&B"
+    )
+    parser.add_argument("--output_dir", type=str, default="./data/")
+    parser.add_argument("--output_per_relation_scores", action="store_true")
+    parser.add_argument(
+        "--per_relation_config",
+        type=dict,
+        default=None,
+        help="Config for per relation nn settings",
+    )
+    parser.add_argument("--output_predictions", action="store_true")
+    parser.add_argument(
+        "--max_answers",
+        type=int,
+        default=100,
+        help="Max number of answers to return. --output_predictions must be set to True",
+    )
 
-#     args = parser.parse_args()
-#     logger.info('COMMAND: %s' % ' '.join(sys.argv))
-#     if args.use_wandb:
-#         wandb.init(project='case-based-reasoning')
-#     main(args)
+    args = parser.parse_args()
+    logger.info("COMMAND: %s" % " ".join(sys.argv))
+    if args.use_wandb:
+        wandb.init(project="case-based-reasoning")
+    main(args)
