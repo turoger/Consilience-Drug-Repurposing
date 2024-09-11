@@ -380,8 +380,8 @@ class ProbCBR(object):
     @staticmethod
     def rank_answers(
         list_answers: List[Tuple[str, float, List[str]]],
-        aggr_type1="none",
-        aggr_type2="sum",
+        # aggr_type1="none",
+        # aggr_type2="sum",
     ) -> List[str]:
         """
         Different ways to re-rank answers
@@ -842,6 +842,8 @@ def main(args):
         )
         if args.prevent_loops:
             args.subgraph_file_name += "_no_loops"
+        if args.add_inv_edges:
+            args.subgraph_file_name += "_inv_edges"
         args.subgraph_file_name += ".pkl"
 
     if os.path.exists(os.path.join(subgraph_dir, args.subgraph_file_name)):

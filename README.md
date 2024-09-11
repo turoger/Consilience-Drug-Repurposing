@@ -12,6 +12,7 @@ This repository leverages seven knowledge graph completion algorithms (four embe
 3. Install requirements into python virtual environment
    ```bash
    # run in shell
+   cd ./data
    mamba create -f environment.yml
    mamba activate kge
    ``` 
@@ -24,7 +25,17 @@ This repository leverages seven knowledge graph completion algorithms (four embe
 * Added methods, `Notebooks/score_utils.py`, to process and translate raw embeddings into human readable entities and relations.
 
 ### Case-based Reasoning
+* Various bug fixes to the cbr code as seen in `./code/cbr_mod.py` and `./code/data/get_paths.py`
+* Added option to export predictions with `--output_predictions`
+
+### Probabilistic Case-based Reasoning
+* Various bug fixes to the pcbr code as seen in `./code/pr_cbr_mod.py`, and `./code/data/get_paths.py`
+* Removed fallbacks
 * TBA
+
+### Rephetio
+* Removed various data building and evaluation notebooks
+* streamline usage
 
 ## Citation
 
