@@ -63,7 +63,7 @@ def get_paths(args, train_adj_list, start_node, max_len=3):
 def main(args):
     logger.info("============={}================".format(args.dataset_name))
     data_dir = os.path.join(args.data_dir, "data", args.dataset_name)
-    out_dir = os.path.join(args.data_dir, "subgraphs", args.dataset_name)
+    out_dir = os.path.join(args.data_dir, "data", "subgraphs", args.dataset_name)
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
     # args.prevent_loops = (args.prevent_loops == 1)
@@ -127,7 +127,17 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Collect subgraphs around entities")
+    parser = argparse.ArgumentParser(
+        description="""get_paths_parallel.py
+        This script enables parallel processing of collecting subgraphs around entities. To use properly, please make sure to set the total_jobs and job_id arguments. The script partitions all entities by the total number of jobs, and will only collect the subgraphs for entities indexed between job_id x num_entities_in_partition and (job_id + 1) x num_entities_in_partition. Run the script with --get_unique_nodes to get the unique entities when running the first job_id.
+        
+        e.g. if you want to run the script in parallel with 3 jobs: 
+        
+        python get_paths_parallel.py --dataset_name nell --total_jobs 3 --job_id 0 --get_unique_nodes
+        python get_paths_parallel.py --dataset_name nell --total_jobs 3 --job_id 1
+        python get_paths_parallel.py --dataset_name nell --total_jobs 3 --job_id 2
+        """
+    )
     parser.add_argument("--dataset_name", type=str, default="nell")
     parser.add_argument(
         "--data_dir",

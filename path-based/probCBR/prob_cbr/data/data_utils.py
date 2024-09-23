@@ -1,16 +1,19 @@
-from tqdm import tqdm
-from collections import defaultdict
-import numpy as np
+import json
+import os
 import tempfile
-from typing import DefaultDict, List, Tuple, Dict, Set
+from collections import defaultdict
+from typing import DefaultDict, Dict, List, Set, Tuple
+
+import numpy as np
 from scipy.sparse import coo_matrix
+from tqdm import tqdm
 
 
 def augment_kb_with_inv_edges(file_name: str) -> None:
     # Create temporary file read/write
     t = tempfile.NamedTemporaryFile(mode="r+")
     # Open input file read-only
-    i = open(file_name, 'r')
+    i = open(file_name, "r")
 
     # Copy input file to temporary file, modifying as we go
     temp_list = []
@@ -23,13 +26,15 @@ def augment_kb_with_inv_edges(file_name: str) -> None:
     i.close()  # Close input file
     o = open(file_name, "w")  # Reopen input file writable
     # Overwriting original file with temporary file contents
-    for (e1, r, e2) in temp_list:
+    for e1, r, e2 in temp_list:
         o.write("{}\t{}\t{}\n".format(e1, r, e2))
     t.close()  # Close temporary file, will cause it to be deleted
     o.close()
 
 
-def create_adj_list(file_name: str, add_inv_edges=False) -> DefaultDict[str, List[Tuple[str, str]]]:
+def create_adj_list(
+    file_name: str, add_inv_edges=False
+) -> DefaultDict[str, List[Tuple[str, str]]]:
     out_map = defaultdict(list)
     fin = open(file_name)
     for line_ctr, line in tqdm(enumerate(fin)):
@@ -43,7 +48,9 @@ def create_adj_list(file_name: str, add_inv_edges=False) -> DefaultDict[str, Lis
     return out_map
 
 
-def create_adj_list_from_triples(triples: List[Tuple[str, str, str]]) -> DefaultDict[str, List[Tuple[str, str]]]:
+def create_adj_list_from_triples(
+    triples: List[Tuple[str, str, str]]
+) -> DefaultDict[str, List[Tuple[str, str]]]:
     out_map = defaultdict(list)
     for edge in triples:
         e1, r, e2 = edge
@@ -51,7 +58,9 @@ def create_adj_list_from_triples(triples: List[Tuple[str, str, str]]) -> Default
     return out_map
 
 
-def load_data(file_name: str) -> DefaultDict[Tuple[str, str], list]:
+def load_data(
+    file_name: str, add_inv_edges: bool = False
+) -> DefaultDict[Tuple[str, str], list]:
     out_map = defaultdict(list)
     fin = open(file_name)
 
@@ -60,10 +69,33 @@ def load_data(file_name: str) -> DefaultDict[Tuple[str, str], list]:
         e1, r, e2 = line.split("\t")
         out_map[(e1, r)].append(e2)
 
+        if add_inv_edges:
+            r_inv = "inv_" + r
+            out_map[(e2, r_inv)].append(e1)
+
     return out_map
 
 
-def load_data_from_triples(triples: List[Tuple[str, str, str]]) -> DefaultDict[Tuple[str, str], list]:
+def load_vocab(data_dir):
+    """
+    Creates both a forward representation and a reverse representation of the vocabulary.
+    """
+    entity_vocab_file = os.path.join(data_dir, "entity_vocab.json")
+    rel_vocab_file = os.path.join(data_dir, "relation_vocab.json")
+    eval_vocab_file = os.path.join(data_dir, "eval_vocab.json")
+    all_vocabs = []
+    for file_name in [entity_vocab_file, rel_vocab_file, eval_vocab_file]:
+        with open(file_name) as fin:
+            vocab = json.load(fin)
+            rev_vocab = {v: k for k, v in vocab.items()}
+            all_vocabs.append(vocab)
+            all_vocabs.append(rev_vocab)
+    return all_vocabs
+
+
+def load_data_from_triples(
+    triples: List[Tuple[str, str, str]]
+) -> DefaultDict[Tuple[str, str], list]:
     out_map = defaultdict(list)
     for edge in tqdm(triples):
         e1, r, e2 = edge
@@ -71,7 +103,9 @@ def load_data_from_triples(triples: List[Tuple[str, str, str]]) -> DefaultDict[T
     return out_map
 
 
-def load_data_all_triples(train_file: str, dev_file: str, test_file: str) -> DefaultDict[Tuple[str, str], list]:
+def load_data_all_triples(
+    train_file: str, dev_file: str, test_file: str
+) -> DefaultDict[Tuple[str, str], list]:
     """
     Returns a map of all triples in the knowledge graph. Use this map only for filtering in evaluation.
     :param train_file:
@@ -89,7 +123,16 @@ def load_data_all_triples(train_file: str, dev_file: str, test_file: str) -> Def
     return out_map
 
 
-def create_vocab(kg_file: str) -> Tuple[Dict[str, int], Dict[int, str], Dict[str, int], Dict[int, str]]:
+def create_vocab(
+    kg_file: str,
+    add_inv_edges: bool = False,
+) -> Tuple[Dict[str, int], Dict[int, str], Dict[str, int], Dict[int, str]]:
+    """
+    Creates vocabulary for entities and relations in the knowledge graph.
+    :return: (entity_vocab, rev_entity_vocab, rel_vocab, rev_rel_vocab)
+    example return:
+    ({'e1': 0, 'e2': 1, 'e3': 2}, {0: 'e1', 1: 'e2', 2: 'e3'}, {'r1': 0, 'r2': 1}, {0: 'r1', 1: 'r2'})
+    """
     entity_vocab, rev_entity_vocab = {}, {}
     rel_vocab, rev_rel_vocab = {}, {}
     fin = open(kg_file)
@@ -109,6 +152,13 @@ def create_vocab(kg_file: str) -> Tuple[Dict[str, int], Dict[int, str], Dict[str
             rel_vocab[r] = rel_ctr
             rev_rel_vocab[rel_ctr] = r
             rel_ctr += 1
+        if add_inv_edges:
+            r_inv = "inv_" + r
+            if r_inv not in rel_vocab:
+                rel_vocab[r_inv] = rel_ctr
+                rev_rel_vocab[rel_ctr] = r_inv
+                rel_ctr += 1
+
     return entity_vocab, rev_entity_vocab, rel_vocab, rev_rel_vocab
 
 
@@ -125,7 +175,9 @@ def create_vocab_wikidata(file_name: str) -> Tuple[Dict[str, int], Dict[str, int
     return vocab, rev_vocab
 
 
-def read_graph(file_name: str, entity_vocab: Dict[str, int], rel_vocab: Dict[str, int]) -> np.ndarray:
+def read_graph(
+    file_name: str, entity_vocab: Dict[str, int], rel_vocab: Dict[str, int]
+) -> np.ndarray:
     adj_mat = np.zeros((len(entity_vocab), len(rel_vocab)))
     fin = open(file_name)
     for line in tqdm(fin):
@@ -136,8 +188,11 @@ def read_graph(file_name: str, entity_vocab: Dict[str, int], rel_vocab: Dict[str
     return adj_mat
 
 
-def read_graph_from_triples(triples: List[Tuple[str, str, str]], entity_vocab: Dict[str, int],
-                            rel_vocab: Dict[str, int]) -> np.ndarray:
+def read_graph_from_triples(
+    triples: List[Tuple[str, str, str]],
+    entity_vocab: Dict[str, int],
+    rel_vocab: Dict[str, int],
+) -> np.ndarray:
     adj_mat = np.zeros((len(entity_vocab), len(rel_vocab)))
     for edge in tqdm(triples):
         e1, r, _ = edge
@@ -199,12 +254,14 @@ def get_entities_group_by_relation(file_name: str) -> DefaultDict[str, List[str]
     rel_to_ent_map = defaultdict(list)
     fin = open(file_name)
     for line in fin:
-        e1, r, e2 = line.strip().split('\t')
+        e1, r, e2 = line.strip().split("\t")
         rel_to_ent_map[r].append(e1)
     return rel_to_ent_map
 
 
-def get_entities_group_by_relation_from_triples(triples: List[Tuple[str, str, str]]) -> DefaultDict[str, List[str]]:
+def get_entities_group_by_relation_from_triples(
+    triples: List[Tuple[str, str, str]]
+) -> DefaultDict[str, List[str]]:
     rel_to_ent_map = defaultdict(list)
     for edge in triples:
         e1, r, e2 = edge
@@ -251,7 +308,7 @@ def get_inv_relation(r: str, dataset_name="nell") -> str:
         if r[:2] == "__" or r[:2] == "_/":
             return r[1:]
         else:
-            return "_" + r
+            return "inv_" + r
 
 
 def return_nearest_relation_str(sim_sorted_ind, rev_rel_vocab, rel, k=5):

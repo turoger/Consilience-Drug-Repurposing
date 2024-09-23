@@ -1,7 +1,11 @@
-import scipy.sparse
-import numpy as np
+import sys
 from typing import *
-from ext.data.data_utils import read_graph
+
+import numpy as np
+import scipy.sparse
+
+sys.path.append(sys.path[0])
+from data_utils import read_graph
 
 
 def get_adj_mat(kg_file, entity_vocab, rel_vocab):
@@ -20,12 +24,18 @@ def get_programs(e: str, ans: str, all_paths_around_e: List[List[str]]):
         for l, (r, e_dash) in enumerate(path):
             if e_dash == ans:
                 # get the path till this point
-                all_programs.append([x for (x, _) in path[:l + 1]])  # we only need to keep the relations
+                all_programs.append(
+                    [x for (x, _) in path[: l + 1]]
+                )  # we only need to keep the relations
     return all_programs
 
 
-def execute_one_program(sparse_adj_mats: Dict[str, scipy.sparse.csr_matrix], entity_vocab: Dict[str, int], e: str,
-                        path: List[str]) -> np.ndarray:
+def execute_one_program(
+    sparse_adj_mats: Dict[str, scipy.sparse.csr_matrix],
+    entity_vocab: Dict[str, int],
+    e: str,
+    path: List[str],
+) -> np.ndarray:
     """
     starts from an entity and executes the path by doing depth first search. If there are multiple edges with the same label, we consider
     max_branch number.
@@ -51,8 +61,16 @@ def create_sparse_adj_mats(train_map, entity_vocab, rel_vocab):
             csr_row[r].append(entity_vocab[e2])
             csr_col[r].append(entity_vocab[e1])
     for r in rel_vocab:
-        sparse_adj_mats[r] = scipy.sparse.csr_matrix((np.array(csr_data[r], dtype=np.uint32),  # data
-                                                      (np.array(csr_row[r], dtype=np.int64),  # row
-                                                       np.array(csr_col[r], dtype=np.int64)))  # col
-                                                     , shape=(len(entity_vocab), len(entity_vocab)))
+        sparse_adj_mats[r] = (
+            scipy.sparse.csr_matrix(  # csr_matrix is a Compressed Sparse Row matrix
+                (
+                    np.array(csr_data[r], dtype=np.uint32),  # data
+                    (
+                        np.array(csr_row[r], dtype=np.int64),  # row
+                        np.array(csr_col[r], dtype=np.int64),
+                    ),
+                ),  # col
+                shape=(len(entity_vocab), len(entity_vocab)),
+            )
+        )
     return sparse_adj_mats

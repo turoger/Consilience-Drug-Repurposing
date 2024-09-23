@@ -1,35 +1,51 @@
 import argparse
-import numpy as np
-import os
-from tqdm import tqdm
-from collections import defaultdict
-import pickle
-import torch
-import uuid
-from typing import *
-import logging
 import json
+import logging
+import os
+import pickle
 import sys
-#import wandb
-import time
 
-from ext.data.data_utils import create_vocab, load_vocab, load_data, get_unique_entities, \
-    read_graph, get_entities_group_by_relation, get_inv_relation, load_data_all_triples, create_adj_list
-from ext.utils import execute_one_program, get_programs, get_adj_mat, create_sparse_adj_mats
+sys.path.append(sys.path[0])
+# import wandb
+import time
+import uuid
+from collections import defaultdict
+from typing import *
+
+import numpy as np
+import torch
+from data_utils import (
+    create_adj_list,
+    create_vocab,
+    get_entities_group_by_relation,
+    get_inv_relation,
+    get_unique_entities,
+    load_data,
+    load_data_all_triples,
+    load_vocab,
+    read_graph,
+)
 from numpy.random import default_rng
+from tqdm import tqdm
+from utils import create_sparse_adj_mats, execute_one_program, get_adj_mat, get_programs
 
 rng = default_rng()
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 ch = logging.StreamHandler()
 ch.setLevel(logging.INFO)
-formatter = logging.Formatter("[%(asctime)s \t %(message)s]",
-                              "%Y-%m-%d %H:%M:%S")
+formatter = logging.Formatter("[%(asctime)s \t %(message)s]", "%Y-%m-%d %H:%M:%S")
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
 
-def get_paths(args, train_adj_list, start_node, max_len=3):
+def get_paths(
+    train_adj_list,
+    start_node,
+    num_paths_to_collect: int = 1000,
+    prevent_loops: bool = True,
+    max_len: int = 3,
+):
     """
     :param start_node:
     :param K:
@@ -37,13 +53,13 @@ def get_paths(args, train_adj_list, start_node, max_len=3):
     :return:
     """
     all_paths = set()
-    for k in range(args.num_paths_to_collect):
+    for k in range(num_paths_to_collect):
         path = []
         curr_node = start_node
         entities_on_path = set([start_node])
         for l in range(max_len):
             outgoing_edges = train_adj_list[curr_node]
-            if args.prevent_loops:
+            if prevent_loops:
                 # Prevent loops
                 temp = []
                 for oe in outgoing_edges:
@@ -66,17 +82,21 @@ def get_paths(args, train_adj_list, start_node, max_len=3):
 
 
 def combine_path_splits(data_dir, file_prefix=None):
+    """
+    Combine subgraphs generated in parallel
+    """
     combined_paths = defaultdict(list)
     # combined_paths = []
     file_names = []
-    for f in tqdm(os.listdir(data_dir)):
+    # append files to a list if it matches the given prefix
+    for f in os.listdir(data_dir):
         if os.path.isfile(os.path.join(data_dir, f)):
             if file_prefix is not None:
                 if not f.startswith(file_prefix):
                     continue
             file_names.append(f)
-    for f in file_names:
-        #logger.info("Reading file name: {}".format(os.path.join(data_dir, f)))
+    for f in tqdm(file_names):
+        # logger.info("Reading file name: {}".format(os.path.join(data_dir, f)))
         with open(os.path.join(data_dir, f), "rb") as fin:
             paths = pickle.load(fin)
             # combined_paths.append(paths)
@@ -89,16 +109,19 @@ def combine_path_splits(data_dir, file_prefix=None):
 
 def get_paths_parallel(args, kg_file, out_dir, job_id=0, total_jobs=1):
     """
+    Collect paths around entities in parallel based on number of total_jobs.
+    Must call it multiple times for each job_id partition in total_jobs.
+
     :param kg_file:
     :return:
     """
     unique_entities = get_unique_entities(kg_file)
     num_entities = len(unique_entities)
-    logger.info("Total num unique entities are {}".format(num_entities))
+    logger.info(f"Total num unique entities are {num_entities}")
     num_entities_in_partition = num_entities / total_jobs
     st = job_id * num_entities_in_partition
     en = min(st + num_entities_in_partition, num_entities)
-    logger.info("Starting a job with st ind {} and end ind {}".format(st, en))
+    logger.info(f"Starting a job with st ind {st} and end ind {en}")
     logger.info("Creating adj list")
     train_adj_list = create_adj_list(kg_file, args.add_inv_edges)
     logger.info("Done creating...")
@@ -106,25 +129,45 @@ def get_paths_parallel(args, kg_file, out_dir, job_id=0, total_jobs=1):
     paths_map = defaultdict(list)
     for ctr, e1 in enumerate(tqdm(unique_entities)):
         if st <= ctr < en:
-            paths = get_paths(args, train_adj_list, e1, args.max_len)
+            paths = get_paths(
+                train_adj_list=train_adj_list,
+                start_node=e1,
+                num_paths_to_collect=args.num_paths_to_collect,
+                prevent_loops=args.prevent_loops,
+                max_len=args.max_len,
+            )
             if paths is None:
                 continue
             paths_map[e1] = paths
             if args.use_wandb and (ctr - st) % 100 == 0:
                 wandb.log({"progress": (ctr - st) / num_entities_in_partition})
 
-    logger.info("Took {} seconds to collect paths for {} entities".format(time.time() - st_time, len(paths_map)))
-    out_file_name = "paths_" + str(args.num_paths_to_collect) + "_path_len_" + str(args.max_len) + "_" + str(job_id)
+    logger.info(
+        f"Took {time.time() - st_time} seconds to collect paths for {len(paths_map)} entities"
+    )
+    out_file_name = (
+        "paths_"
+        + str(args.num_paths_to_collect)
+        + "_pathLen_"
+        + str(args.max_len)
+        + "_"
+        + str(job_id)
+    )
     if args.prevent_loops:
-        out_file_name += "_no_loops"
+        out_file_name += "_noLoops"
+
+    if args.add_inv_edges:
+        out_file_name += "_invEdges"
     out_file_name += ".pkl"
-    fout = open(os.path.join(out_dir, out_file_name), "wb")
-    logger.info("Saving at {}".format(os.path.join(out_dir, out_file_name)))
-    pickle.dump(paths_map, fout)
-    fout.close()
+
+    with open(os.path.join(out_dir, out_file_name), "wb") as fout:
+        logger.info(f"Saving path at {os.path.join(out_dir, out_file_name)}")
+        pickle.dump(paths_map, fout)
 
 
-def combine_precision_maps(args, dir_name, output_dir_name, output_file_name="precision_map.pkl"):
+def combine_precision_maps(
+    args, dir_name, output_dir_name, output_file_name="precision_map.pkl"
+):
     """
     Combines all the individual maps
     :param dir_name:
@@ -178,6 +221,7 @@ def combine_precision_maps(args, dir_name, output_dir_name, output_file_name="pr
                     ratio_map[c][r][path] = s_c / combined_denominator_map[c][r][path]
                 except ZeroDivisionError:
                     import pdb
+
                     pdb.set_trace()
 
     output_filenm = os.path.join(output_dir_name, output_file_name)
@@ -195,11 +239,17 @@ def calc_precision_map_parallel(args, dir_name, job_id=0, total_jobs=1):
     :return:
     """
     logger.info("Calculating precision map")
-    success_map, total_map = {}, {}  # map from query r to a dict of path and ratio of success
+    success_map, total_map = (
+        {},
+        {},
+    )  # map from query r to a dict of path and ratio of success
     # not sure why I am getting RuntimeError: dictionary changed size during iteration.
     train_map = [((e1, r), e2_list) for ((e1, r), e2_list) in args.train_map.items()]
     # sort this list so that every job gets the same list for processing
-    train_map = [((e1, r), e2_list) for ((e1, r), e2_list) in sorted(train_map, key=lambda item: item[0])]
+    train_map = [
+        ((e1, r), e2_list)
+        for ((e1, r), e2_list) in sorted(train_map, key=lambda item: item[0])
+    ]
     job_size = len(train_map) / total_jobs
     st = job_id * job_size
     en = min((job_id + 1) * job_size, len(train_map))
@@ -208,8 +258,8 @@ def calc_precision_map_parallel(args, dir_name, job_id=0, total_jobs=1):
         if e_ctr < st or e_ctr >= en:
             # not this partition
             continue
-        if e_ctr % 100 == 0:
-            logger.info("Processing entity# {}".format(e_ctr))
+        # if e_ctr % 100 == 0:
+        #     logger.info("Processing entity# {}".format(e_ctr))
         c = args.entity_vocab[e1]  # calculate stats for each entity
         if c not in success_map:
             success_map[c] = {}
@@ -224,7 +274,9 @@ def calc_precision_map_parallel(args, dir_name, job_id=0, total_jobs=1):
         else:
             continue  # if a relation is missing from prior map, then no need to calculate precision for that relation.
         for p_ctr, (path, _) in enumerate(paths_for_this_relation.items()):
-            ans_vec = execute_one_program(args.sparse_adj_mats, args.entity_vocab, e1, path)
+            ans_vec = execute_one_program(
+                args.sparse_adj_mats, args.entity_vocab, e1, path
+            )
             ans = [args.rev_entity_vocab[d_e] for d_e in np.nonzero(ans_vec)[0]]
             if len(ans) == 0:
                 continue
@@ -244,13 +296,15 @@ def calc_precision_map_parallel(args, dir_name, job_id=0, total_jobs=1):
     logger.info("Done...")
 
 
-def combine_prior_maps(args, dir_name, output_dir, output_file_name="path_prior_map.pkl"):
+def combine_prior_maps(
+    args, dir_name, output_dir, output_file_name="path_prior_map.pkl"
+):
     all_program_maps = []
     combined_program_maps = {}
-    logger.info("Combining prior maps located in {}".format(dir_name))
+    logger.info(f"Combining prior maps located in {dir_name}")
     for filename in os.listdir(dir_name):
         if filename.endswith("_path_prior_map.pkl"):
-            logger.info("Reading {}".format(filename))
+            logger.info(f"Reading {filename}")
             with open(os.path.join(dir_name, filename), "rb") as fin:
                 program_maps = pickle.load(fin)
                 all_program_maps.append(program_maps)
@@ -295,16 +349,19 @@ def calc_prior_path_prob_parallel(args, output_dir_name, job_id=0, total_jobs=1)
     job_size = len(args.train_map) / total_jobs
     st = job_id * job_size
     en = min((job_id + 1) * job_size, len(args.train_map))
-    logger.info("Start of partition: {}, End of partition: {}".format(st, en))
+    logger.info(f"Start of partition: {st}, End of partition: {en}")
     train_map = [((e1, r), e2_list) for ((e1, r), e2_list) in args.train_map.items()]
     # sort this list so that every job gets the same list for processing
-    train_map = [((e1, r), e2_list) for ((e1, r), e2_list) in sorted(train_map, key=lambda item: item[0])]
+    train_map = [
+        ((e1, r), e2_list)
+        for ((e1, r), e2_list) in sorted(train_map, key=lambda item: item[0])
+    ]
     for e_ctr, ((e1, r), e2_list) in enumerate(tqdm((train_map))):
         if e_ctr < st or e_ctr >= en:
             # not this partition
             continue
-        if e_ctr % 100 == 0:
-            logger.info("Processing entity #{}".format(e_ctr))
+        #  if e_ctr % 100 == 0:
+        #      logger.info(f"Processing entity #{e_ctr}")
         c = args.entity_vocab[e1]  # calculate stats for each entity
         if c not in programs_map:
             programs_map[c] = {}
@@ -323,8 +380,8 @@ def calc_prior_path_prob_parallel(args, output_dir_name, job_id=0, total_jobs=1)
                     programs_map[c][r][p] = 0
                 programs_map[c][r][p] += 1
 
-    output_filenm = os.path.join(output_dir_name, "{}_path_prior_map.pkl".format(job_id))
-    logger.info("Dumping path prior pickle at {}".format(output_filenm))
+    output_filenm = os.path.join(output_dir_name, f"{job_id}_path_prior_map.pkl")
+    logger.info(f"Dumping path prior pickle at {output_filenm}")
 
     with open(output_filenm, "wb") as fout:
         pickle.dump(programs_map, fout)
@@ -343,62 +400,105 @@ def calc_sim(adj_mat: torch.Tensor, query_entities: torch.LongTensor) -> torch.T
     return sim
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Collect subgraphs around entities")
     # data specific args
-    parser.add_argument("--dataset_name", type=str, default="obl2021")
-    parser.add_argument("--data_dir", type=str, default="/home/rajarshi/Dropbox/research/Open-BIo-Link/")
-    parser.add_argument("--expt_dir", type=str, default="../prob_cbr_expts/")
-    parser.add_argument("--subgraph_file_name", type=str, default="combined_paths_10000_len_3_no_loops.pkl")
+    parser.add_argument("--dataset_name", type=str, default="MIND_Copy")
+    parser.add_argument("--data_dir", type=str, default="./")
+    parser.add_argument("--expt_dir", type=str, default="./")
+    parser.add_argument(
+        "--subgraph_file_name",
+        type=str,
+        default="combined_paths_10000_len_3_no_loops.pkl",
+    )
     parser.add_argument("--small", action="store_true")
     parser.add_argument("--test", action="store_true")
-    parser.add_argument("--test_file_name", type=str, default='',
-                        help="Useful to switch between test files for FB122")
-    parser.add_argument("--sim_batch_size", type=int, default=128,
-                        help="Batch size to use when doing ent-ent similarity")
-    parser.add_argument("--k_adj", type=int, default=100,
-                        help="Number of nearest neighbors to consider based on adjacency matrix")
+    parser.add_argument(
+        "--test_file_name",
+        type=str,
+        default="test.txt",
+        help="Useful to switch between test files for FB122",
+    )
+    parser.add_argument(
+        "--sim_batch_size",
+        type=int,
+        default=128,
+        help="Batch size to use when doing ent-ent similarity",
+    )
+    parser.add_argument(
+        "--k_adj",
+        type=int,
+        default=100,
+        help="Number of nearest neighbors to consider based on adjacency matrix",
+    )
     # properties of paths
     parser.add_argument("--num_paths_to_collect", type=int, default=1000)
     parser.add_argument("--max_len", type=int, default=4)
-    parser.add_argument("--prevent_loops", type=int, choices=[0, 1], default=1, help="prevent sampling of looped paths")
+    parser.add_argument(
+        "--prevent_loops",
+        action="store_true",
+        help="prevent sampling of looped paths",
+    )
     parser.add_argument("--add_inv_edges", action="store_true")
     # preprocessing args
     parser.add_argument("--create_vocab", action="store_true")
-    parser.add_argument("--combine_paths", action="store_true")
-    parser.add_argument("--calculate_precision_map_parallel", action="store_true",
-                        help="If on, calculate precision maps")
-    parser.add_argument("--calculate_prior_map_parallel", action="store_true",
-                        help="If on, calculate precision maps")
-    parser.add_argument("--calculate_ent_similarity", action="store_true",
-                        help="If on, calculate precision maps")
-    parser.add_argument("--get_paths_parallel", action="store_true",
-                        help="If on, collect paths around entities...")
-    parser.add_argument("--combine_precision_map", action="store_true",
-                        help="If on, combine precision maps")
-    parser.add_argument("--combine_prior_map", action="store_true",
-                        help="If on, combine prior maps")
+    parser.add_argument(
+        "--combine_paths",
+        action="store_true",
+        help="Combine paths collected in parallel",
+    )
+    parser.add_argument(
+        "--calculate_precision_map_parallel",
+        action="store_true",
+        help="Calculate precision maps",
+    )
+    parser.add_argument(
+        "--calculate_prior_map_parallel",
+        action="store_true",
+        help="Calculate prior maps",
+    )
+    parser.add_argument(
+        "--calculate_ent_similarity",
+        action="store_true",
+        help="Calculate entity similarity",
+    )
+    parser.add_argument(
+        "--get_paths_parallel",
+        action="store_true",
+        help="Collect paths around entities...",
+    )
+    parser.add_argument(
+        "--combine_precision_map",
+        action="store_true",
+        help="Combine precision maps",
+    )
+    parser.add_argument(
+        "--combine_prior_map", action="store_true", help="Combine prior maps"
+    )
     parser.add_argument("--do_clustering", action="store_true")
     # parallel jobs
-    parser.add_argument("--total_jobs", type=int, default=50,
-                        help="Total number of jobs")
-    parser.add_argument("--current_job", type=int, default=0,
-                        help="Current job id")
+    parser.add_argument(
+        "--total_jobs", type=int, default=50, help="Total number of jobs"
+    )
+    parser.add_argument("--current_job", type=int, default=0, help="Current job id")
     parser.add_argument("--name_of_run", type=str, default="unset")
     # Clustering args
-    parser.add_argument("--linkage", type=float, default=0.8,
-                        help="Clustering threshold")
+    parser.add_argument(
+        "--linkage", type=float, default=0.8, help="Clustering threshold"
+    )
     # Wandb
-    parser.add_argument("--use_wandb", type=int, choices=[0, 1], default=1, help="Set to 1 if using W&B")
+    parser.add_argument("--use_wandb", action="store_true", help="If using W&B")
 
     args = parser.parse_args()
-    logger.info('COMMAND: %s' % ' '.join(sys.argv))
+    logger.info("COMMAND: %s" % " ".join(sys.argv))
     if args.use_wandb:
-        wandb.init(project='pr-cbr')
+        wandb.init(project="pr-cbr")
     assert 0 <= args.current_job < args.total_jobs and args.total_jobs > 0
     if args.name_of_run == "unset":
         args.name_of_run = str(uuid.uuid4())[:8]
-    args.output_dir = os.path.join(args.expt_dir, "outputs", args.dataset_name, args.name_of_run)
+    args.output_dir = os.path.join(
+        args.expt_dir, "outputs", args.dataset_name, args.name_of_run
+    )
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
     logger.info(f"Output directory: {args.output_dir}")
@@ -406,24 +506,40 @@ if __name__ == '__main__':
     dataset_name = args.dataset_name
     logger.info("==========={}============".format(dataset_name))
     data_dir = os.path.join(args.data_dir, "data", dataset_name)
-    subgraph_dir = os.path.join(args.data_dir, "subgraphs", dataset_name, "paths_{}".format(args.num_paths_to_collect))
-    kg_file = os.path.join(data_dir, "full_graph.txt") if dataset_name == "nell" else os.path.join(data_dir,
-                                                                                                   "graph.txt")
+    subgraph_dir = os.path.join(
+        args.data_dir,
+        "data",
+        "subgraphs",
+        dataset_name,
+    )
+    kg_file = (
+        os.path.join(data_dir, "full_graph.txt")
+        if dataset_name == "nell"
+        else os.path.join(data_dir, "graph.txt")
+    )
     args.dev_file = os.path.join(data_dir, "dev.txt")
-    args.test_file = os.path.join(data_dir, "test.txt") if not args.test_file_name \
+    args.test_file = (
+        os.path.join(data_dir, "test.txt")
+        if not args.test_file_name
         else os.path.join(data_dir, args.test_file_name)
+    )
 
-    args.train_file = os.path.join(data_dir, "graph.txt") if dataset_name == "nell" else os.path.join(data_dir,
-                                                                                                      "train.txt")
+    args.train_file = (
+        os.path.join(data_dir, "graph.txt")
+        if dataset_name == "nell"
+        else os.path.join(data_dir, "train.txt")
+    )
     if args.get_paths_parallel:
         kg_file = os.path.join(data_dir, "graph.txt")
         if not os.path.exists(subgraph_dir):  # subgraph dir is the output dir
             os.makedirs(subgraph_dir)
-        get_paths_parallel(args, kg_file, subgraph_dir, args.current_job, args.total_jobs)
+        get_paths_parallel(
+            args, kg_file, subgraph_dir, args.current_job, args.total_jobs
+        )
         sys.exit(0)
 
     logger.info("Loading train map")
-    train_map = load_data(kg_file)
+    train_map = load_data(kg_file, args.add_inv_edges)
     logger.info("Loading dev map")
     dev_map = load_data(args.dev_file)
     logger.info("Loading test map")
@@ -435,7 +551,9 @@ if __name__ == '__main__':
         eval_file = args.test_file
 
     if args.create_vocab:
-        entity_vocab, rev_entity_vocab, rel_vocab, rev_rel_vocab = create_vocab(kg_file)
+        entity_vocab, rev_entity_vocab, rel_vocab, rev_rel_vocab = create_vocab(
+            kg_file, args.add_inv_edges
+        )
         eval_entities = get_unique_entities(args.dev_file)
         test_entities = get_unique_entities(args.test_file)
         eval_entities = eval_entities | test_entities  # take union of the two.
@@ -451,14 +569,25 @@ if __name__ == '__main__':
         entity_vocab_file = os.path.join(data_dir, "entity_vocab.json")
         rel_vocab_file = os.path.join(data_dir, "relation_vocab.json")
         eval_vocab_file = os.path.join(data_dir, "eval_vocab.json")
-        for file_name, vocab in [(entity_vocab_file, entity_vocab), (rel_vocab_file, rel_vocab),
-                                 (eval_vocab_file, eval_vocab)]:
+        for file_name, vocab in [
+            (entity_vocab_file, entity_vocab),
+            (rel_vocab_file, rel_vocab),
+            (eval_vocab_file, eval_vocab),
+        ]:
             logger.info("Writing {}".format(file_name))
             with open(file_name, "w") as fin:
                 json.dump(vocab, fin)
         sys.exit(0)
     logger.info("Loading vocabs...")
-    entity_vocab, rev_entity_vocab, rel_vocab, rev_rel_vocab, eval_vocab, eval_rev_vocab = load_vocab(data_dir)
+    (
+        entity_vocab,
+        rev_entity_vocab,
+        rel_vocab,
+        rev_rel_vocab,
+        eval_vocab,
+        eval_rev_vocab,
+    ) = load_vocab(data_dir)
+
     # making these part of args for easier access #hack
     args.entity_vocab = entity_vocab
     args.rel_vocab = rel_vocab
@@ -469,16 +598,18 @@ if __name__ == '__main__':
     args.test_map = test_map
     adj_mat = get_adj_mat(kg_file, entity_vocab, rel_vocab)
     logger.info("Building sparse adjacency matrices")
-    args.sparse_adj_mats = create_sparse_adj_mats(args.train_map, args.entity_vocab, args.rel_vocab)
+    args.sparse_adj_mats = create_sparse_adj_mats(
+        args.train_map, args.entity_vocab, args.rel_vocab
+    )
     if args.calculate_ent_similarity:
         logger.info("Calculating entity similarity matrix...")
         adj_mat = torch.from_numpy(adj_mat)
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(device)
-        logger.info('Using device: {}'.format(device.__str__()))
+        logger.info("Using device: {}".format(device.__str__()))
         adj_mat = adj_mat.to(device)
         # Changed
-        adj_mat= adj_mat.cpu()
+        adj_mat = adj_mat.cpu()
         query_ind = []
         for i in range(len(eval_vocab)):
             query_ind.append(entity_vocab[eval_rev_vocab[i]])
@@ -492,16 +623,27 @@ if __name__ == '__main__':
         batch_sim, batch_sim_ind = None, None
         while st < query_ind.shape[0]:
             en = min(st + args.sim_batch_size, query_ind.shape[0])
-            logger.info("st: {}, en: {}, query_ind.shape[0]: {}".format(st, en, query_ind.shape[0]))
-            batch_sim = calc_sim(adj_mat, query_ind[st:en])  # n X N (n== size of dev_entities, N: size of all entities)
-            #batch_sim_sorted = np.sort(-batch_sim, axis=-1)
-            #batch_sim = batch_sim.detach().cpu().numpy()
+            logger.info(
+                "st: {}, en: {}, query_ind.shape[0]: {}".format(
+                    st, en, query_ind.shape[0]
+                )
+            )
+            batch_sim = calc_sim(
+                adj_mat, query_ind[st:en]
+            )  # n X N (n== size of dev_entities, N: size of all entities)
+            # batch_sim_sorted = np.sort(-batch_sim, axis=-1)
+            # batch_sim = batch_sim.detach().cpu().numpy()
             batch_sim_ind = np.argsort(-batch_sim, axis=-1)
-            batch_sim_ind = batch_sim_ind[:, :args.k_adj]
+            batch_sim_ind = batch_sim_ind[:, : args.k_adj]
             batch_sim_sorted = None
             for i in range(batch_sim.shape[0]):
-                batch_sim_sorted = batch_sim[i, batch_sim_ind[i, :]] if batch_sim_sorted is None else np.vstack(
-                    [batch_sim_sorted, batch_sim[i, batch_sim_ind[i, :]]])
+                batch_sim_sorted = (
+                    batch_sim[i, batch_sim_ind[i, :]]
+                    if batch_sim_sorted is None
+                    else np.vstack(
+                        [batch_sim_sorted, batch_sim[i, batch_sim_ind[i, :]]]
+                    )
+                )
             if sim is None:
                 sim = batch_sim_sorted
                 arg_sim = batch_sim_ind
@@ -515,90 +657,143 @@ if __name__ == '__main__':
         with open(ent_sim_dict_file, "wb") as fout:
             pickle.dump({"sim": sim, "arg_sim": arg_sim}, fout)
         sys.exit(0)
+
+    dir_name = os.path.join(
+        args.data_dir, "data", "outputs", args.dataset_name, f"linkage={args.linkage}"
+    )
     if args.do_clustering:
         if args.linkage > 0:
             raise NotImplementedError
-            # if os.path.exists(os.path.join(data_dir, "linkage={}".format(args.linkage), "cluster_assignments.pkl")):
-            #     logger.info("Clustering with linkage {} found, loading them....".format(args.linkage))
-            #     fin = open(os.path.join(data_dir, "linkage={}".format(args.linkage), "cluster_assignments.pkl"), "rb")
-            #     args.cluster_assignments = pickle.load(fin)
-            #     fin.close()
-            # else:
-            #     logger.info("Clustering entities with linkage = {}...".format(args.linkage))
-            #     args.cluster_assignments = cluster_entities(adj_mat, args.linkage)
-            #     logger.info("There are {} unique clusters".format(np.unique(args.cluster_assignments).shape[0]))
-            #     dir_name = os.path.join(data_dir, "linkage={}".format(args.linkage))
-            #     if not os.path.exists(dir_name):
-            #         os.makedirs(dir_name)
-            #     logger.info("Dumping cluster assignments of entities at {}".format(dir_name))
-            #     fout = open(os.path.join(dir_name, "cluster_assignments.pkl"), "wb")
-            #     pickle.dump(args.cluster_assignments, fout)
-            #     fout.close()
         else:
             args.cluster_assignments = np.zeros(adj_mat.shape[0])
-            dir_name = os.path.join(args.data_dir, "data", args.dataset_name, "linkage={}".format(args.linkage))
             if not os.path.exists(dir_name):
                 os.makedirs(dir_name)
-            logger.info("Dumping cluster assignments of entities at {}".format(dir_name))
-            fout = open(os.path.join(dir_name, "cluster_assignments.pkl"), "wb")
-            pickle.dump(args.cluster_assignments, fout)
-            fout.close()
+            logger.info(f"Dumping cluster assignments of entities at {dir_name}")
+            with open(os.path.join(dir_name, "cluster_assignments.pkl"), "wb") as fout:
+                pickle.dump(args.cluster_assignments, fout)
 
-    dir_name = os.path.join(args.data_dir, "data", args.dataset_name, "linkage={}".format(args.linkage))
+    assert os.path.exists(dir_name), f"Cluster assignments not found at {dir_name}"
     logger.info(
-        "Loading cluster assignments of entities from {}".format(os.path.join(dir_name, "cluster_assignments.pkl")))
+        f"Loading cluster assignments of entities from {os.path.join(dir_name, 'cluster_assignments.pkl')}"
+    )
     with open(os.path.join(dir_name, "cluster_assignments.pkl"), "rb") as fin:
         args.cluster_assignments = pickle.load(fin)
 
     if args.calculate_prior_map_parallel:
         logger.info(
-            "Calculating prior map. Current job id: {}, Total jobs: {}".format(args.current_job, args.total_jobs))
+            f"Calculating prior map. Current job id: {args.current_job}, Total jobs: {args.total_jobs}"
+        )
         logger.info("Loading subgraph around entities:")
-        file_prefix = "paths_{}_path_len_{}_".format(args.num_paths_to_collect, args.max_len)
-        all_paths = combine_path_splits(subgraph_dir, file_prefix=file_prefix)
+        file_prefix = f"paths_{args.num_paths_to_collect}_path_len_{args.max_len}_"
+        if os.path.exists(file_prefix + "combined.pkl"):
+            logger.info("subgraph found.Loading combined paths...")
+            with open(
+                os.path.join(subgraph_dir, file_prefix + "combined.pkl"), "rb"
+            ) as fin:
+                all_paths = pickle.load(fin)
+
+        else:
+            all_paths = combine_path_splits(subgraph_dir, file_prefix=file_prefix)
         logger.info("Done...")
         args.all_paths = all_paths
         assert args.all_paths is not None
         assert args.train_map is not None
-        dir_name = os.path.join(args.data_dir, "data", args.dataset_name,
-                                "per_entity_maps", "prior_maps",
-                                "path_{}".format(args.num_paths_to_collect))
+        dir_name = os.path.join(
+            args.data_dir,
+            "data",
+            "outputs",
+            args.dataset_name,
+            f"linkage={args.linkage}",
+            f"path_len_{args.max_path_len}",
+            "prior_maps",
+        )
         if not os.path.exists(dir_name):
             os.makedirs(dir_name)
         calc_prior_path_prob_parallel(args, dir_name, args.current_job, args.total_jobs)
 
+    if args.combine_paths:
+        logger.info(f"Loading paths generated in parallel.")
+        file_prefix = f"paths_{args.num_paths_to_collect}_path_len_{args.max_len}_"
+        all_paths = combine_path_splits(subgraph_dir, file_prefix=file_prefix)
+
+        dir_name = os.path.join(
+            args.data_dir,
+            "data",
+            "subgraphs",
+            args.dataset_name,
+        )
+        if not os.path.exists(dir_name):
+            os.makedirs(dir_name)
+        logger.info(f"Combining paths parallel paths.")
+        with open(os.path.join(dir_name, file_prefix + "combined.pkl"), "wb") as fout:
+            pickle.dump(all_paths, fout)
+
     if args.combine_prior_map:
         assert args.cluster_assignments is not None
-        input_dir_name = os.path.join(args.data_dir, "data", args.dataset_name,
-                                      "per_entity_maps", "prior_maps",
-                                      "path_{}".format(args.num_paths_to_collect))
-        output_dir_name = os.path.join(args.data_dir, "data", args.dataset_name, "linkage={}".format(args.linkage), "prior_maps",
-                                       "path_{}".format(args.num_paths_to_collect))
+        input_dir_name = os.path.join(
+            args.data_dir,
+            "data",
+            "outputs",
+            args.dataset_name,
+            f"linkage={args.linkage}",
+            f"path_len_{args.max_path_len}",
+            "prior_maps",
+        )
+        output_dir_name = os.path.join(
+            args.data_dir,
+            "data",
+            "outputs",
+            args.dataset_name,
+            f"linkage={args.linkage}",
+            f"path_len_{args.max_path_len}",
+        )
         if not os.path.exists(output_dir_name):
             os.makedirs(output_dir_name)
         combine_prior_maps(args, input_dir_name, output_dir_name)
 
     if args.calculate_precision_map_parallel:
         logger.info(
-            "Calculating precision map. Current job id: {}, Total jobs: {}".format(args.current_job, args.total_jobs))
+            f"Calculating precision map. Current job id: {args.current_job}, Total jobs: {args.total_jobs}"
+        )
         assert args.train_map is not None
         logger.info("Loading prior map...")
-        dir_name = os.path.join(args.data_dir, "data", args.dataset_name,
-                                "per_entity_maps")
-        per_entity_prior_map_dir = os.path.join(dir_name, "prior_maps", "path_{}".format(args.num_paths_to_collect))
+        dir_name = os.path.join(
+            args.data_dir,
+            "data",
+            "outputs",
+            args.dataset_name,
+            f"linkage={args.linkage}",
+            f"path_len_{args.max_path_len}",
+        )
+        per_entity_prior_map_dir = os.path.join(dir_name, "prior_maps")
         args.path_prior_map_per_entity = combine_path_splits(per_entity_prior_map_dir)
         assert args.path_prior_map_per_entity is not None
-        dir_name = os.path.join(dir_name, "precision_maps", "path_{}".format(args.num_paths_to_collect))
+        dir_name = os.path.join(
+            dir_name,
+            "precision_maps",
+        )
         if not os.path.exists(dir_name):
             os.makedirs(dir_name)
         calc_precision_map_parallel(args, dir_name, args.current_job, args.total_jobs)
 
     if args.combine_precision_map:
-        dir_name = os.path.join(args.data_dir, "data", args.dataset_name,
-                                "per_entity_maps", "precision_maps",
-                                "path_{}".format(args.num_paths_to_collect))
-        output_dir_name = os.path.join(args.data_dir, "data", args.dataset_name, "linkage={}".format(args.linkage), "precision_maps",
-                                       "path_{}".format(args.num_paths_to_collect))
+        dir_name = os.path.join(
+            args.data_dir,
+            "data",
+            "outputs",
+            args.dataset_name,
+            f"linkage={args.linkage}",
+            f"path_len_{args.max_path_len}",
+            "precision_maps",
+        )
+        output_dir_name = os.path.join(
+            args.data_dir,
+            "data",
+            "outputs",
+            args.dataset_name,
+            f"linkage={args.linkage}",
+            f"path_len_{args.max_path_len}",
+        )
         if not os.path.exists(output_dir_name):
             os.makedirs(output_dir_name)
         combine_precision_maps(args, dir_name, output_dir_name)
