@@ -44,12 +44,12 @@ def get_paths(
     start_node,
     num_paths_to_collect: int = 1000,
     prevent_loops: bool = True,
-    max_len: int = 3,
+    max_path_len: int = 3,
 ):
     """
     :param start_node:
     :param K:
-    :param max_len:
+    :param max_path_len:
     :return:
     """
     all_paths = set()
@@ -57,7 +57,7 @@ def get_paths(
         path = []
         curr_node = start_node
         entities_on_path = set([start_node])
-        for l in range(max_len):
+        for l in range(max_path_len):
             outgoing_edges = train_adj_list[curr_node]
             if prevent_loops:
                 # Prevent loops
@@ -134,7 +134,7 @@ def get_paths_parallel(args, kg_file, out_dir, job_id=0, total_jobs=1):
                 start_node=e1,
                 num_paths_to_collect=args.num_paths_to_collect,
                 prevent_loops=args.prevent_loops,
-                max_len=args.max_len,
+                max_path_len=args.max_path_len,
             )
             if paths is None:
                 continue
@@ -149,7 +149,7 @@ def get_paths_parallel(args, kg_file, out_dir, job_id=0, total_jobs=1):
         "paths_"
         + str(args.num_paths_to_collect)
         + "_pathLen_"
-        + str(args.max_len)
+        + str(args.max_path_len)
         + "_"
         + str(job_id)
     )
@@ -433,7 +433,7 @@ if __name__ == "__main__":
     )
     # properties of paths
     parser.add_argument("--num_paths_to_collect", type=int, default=1000)
-    parser.add_argument("--max_len", type=int, default=4)
+    parser.add_argument("--max_path_len", type=int, default=4)
     parser.add_argument(
         "--prevent_loops",
         action="store_true",
@@ -481,7 +481,7 @@ if __name__ == "__main__":
         "--total_jobs", type=int, default=50, help="Total number of jobs"
     )
     parser.add_argument("--current_job", type=int, default=0, help="Current job id")
-    parser.add_argument("--name_of_run", type=str, default="unset")
+    # parser.add_argument("--name_of_run", type=str, default="unset")
     # Clustering args
     parser.add_argument(
         "--linkage", type=float, default=0.8, help="Clustering threshold"
@@ -494,13 +494,13 @@ if __name__ == "__main__":
     if args.use_wandb:
         wandb.init(project="pr-cbr")
     assert 0 <= args.current_job < args.total_jobs and args.total_jobs > 0
-    if args.name_of_run == "unset":
-        args.name_of_run = str(uuid.uuid4())[:8]
-    args.output_dir = os.path.join(
-        args.expt_dir, "outputs", args.dataset_name, args.name_of_run
-    )
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
+    # if args.name_of_run == "unset":
+    #     args.name_of_run = str(uuid.uuid4())[:8]
+    # args.output_dir = os.path.join(
+    #     args.expt_dir, "outputs", args.dataset_name, args.name_of_run
+    # )
+    # if not os.path.exists(args.output_dir):
+    #     os.makedirs(args.output_dir)
     logger.info(f"Output directory: {args.output_dir}")
 
     dataset_name = args.dataset_name
@@ -574,7 +574,7 @@ if __name__ == "__main__":
             (rel_vocab_file, rel_vocab),
             (eval_vocab_file, eval_vocab),
         ]:
-            logger.info("Writing {}".format(file_name))
+            logger.info(f"Writing {file_name}")
             with open(file_name, "w") as fin:
                 json.dump(vocab, fin)
         sys.exit(0)
@@ -653,7 +653,7 @@ if __name__ == "__main__":
             st = en
         dir_name = os.path.join(args.data_dir, "data", args.dataset_name)
         ent_sim_dict_file = os.path.join(dir_name, "ent_sim.pkl")
-        logger.info("Writing {}".format(ent_sim_dict_file))
+        logger.info(f"Writing {ent_sim_dict_file}")
         with open(ent_sim_dict_file, "wb") as fout:
             pickle.dump({"sim": sim, "arg_sim": arg_sim}, fout)
         sys.exit(0)
@@ -684,15 +684,24 @@ if __name__ == "__main__":
             f"Calculating prior map. Current job id: {args.current_job}, Total jobs: {args.total_jobs}"
         )
         logger.info("Loading subgraph around entities:")
-        file_prefix = f"paths_{args.num_paths_to_collect}_path_len_{args.max_len}_"
-        if os.path.exists(file_prefix + "combined.pkl"):
-            logger.info("subgraph found.Loading combined paths...")
-            with open(
-                os.path.join(subgraph_dir, file_prefix + "combined.pkl"), "rb"
-            ) as fin:
+        file_prefix = f"paths_{args.num_paths_to_collect}_pathLen_{args.max_path_len}_"
+
+        file_prefix2 = file_prefix
+        if args.prevent_loops and args.add_inv_edges:
+            file_prefix2 += "noLoops_invEdges"
+        elif args.prevent_loops:
+            file_prefix2 += "noLoops"
+        elif args.add_inv_edges:
+            file_prefix2 += "invEdges"
+
+        subgraph_file = os.path.join(subgraph_dir, file_prefix2 + "_combined.pkl")
+        if os.path.exists(subgraph_file):
+            logger.info("Combined subgraph found. Loading combined paths...")
+            with open(os.path.join(subgraph_file), "rb") as fin:
                 all_paths = pickle.load(fin)
 
         else:
+            logger.info("Combined subgraph not found. Loading paths...")
             all_paths = combine_path_splits(subgraph_dir, file_prefix=file_prefix)
         logger.info("Done...")
         args.all_paths = all_paths
@@ -713,7 +722,7 @@ if __name__ == "__main__":
 
     if args.combine_paths:
         logger.info(f"Loading paths generated in parallel.")
-        file_prefix = f"paths_{args.num_paths_to_collect}_path_len_{args.max_len}_"
+        file_prefix = f"paths_{args.num_paths_to_collect}_path_len_{args.max_path_len}_"
         all_paths = combine_path_splits(subgraph_dir, file_prefix=file_prefix)
 
         dir_name = os.path.join(
@@ -746,6 +755,7 @@ if __name__ == "__main__":
             args.dataset_name,
             f"linkage={args.linkage}",
             f"path_len_{args.max_path_len}",
+            "prior_maps",
         )
         if not os.path.exists(output_dir_name):
             os.makedirs(output_dir_name)
@@ -766,7 +776,19 @@ if __name__ == "__main__":
             f"path_len_{args.max_path_len}",
         )
         per_entity_prior_map_dir = os.path.join(dir_name, "prior_maps")
-        args.path_prior_map_per_entity = combine_path_splits(per_entity_prior_map_dir)
+        per_entity_prior_map_file = os.path.join(
+            per_entity_prior_map_dir, "path_prior_map.pkl"
+        )
+        if os.path.exists(per_entity_prior_map_file):
+            logger.info("Prior maps found. Loading path_prior_map")
+            with open(per_entity_prior_map_file, "rb") as fin:
+                args.path_prior_map_per_entity = pickle.load(fin)
+        else:
+            logger.info("Prior maps not found. Combining prior maps")
+            args.path_prior_map_per_entity = combine_path_splits(
+                per_entity_prior_map_dir
+            )
+
         assert args.path_prior_map_per_entity is not None
         dir_name = os.path.join(
             dir_name,
@@ -793,6 +815,7 @@ if __name__ == "__main__":
             args.dataset_name,
             f"linkage={args.linkage}",
             f"path_len_{args.max_path_len}",
+            "precision_maps",
         )
         if not os.path.exists(output_dir_name):
             os.makedirs(output_dir_name)
