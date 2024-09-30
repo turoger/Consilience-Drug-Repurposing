@@ -18,8 +18,8 @@ This repository leverages seven knowledge graph completion algorithms (four embe
    ``` 
 4. Run notebooks in `./Notebooks`
 
-## Modifications Summary
-### Knowledge Graph Embedding repository
+## Changelog Summary
+### Knowledge Graph Embedding
 * Added code to output raw embeddings in order to extract predictions. This can be done with the `--do_predict` flag in `kge/codes/run.py`.
 * Added Notebooks folder that encapsulates analysis done on the MIND dataset.
 * Added methods, `Notebooks/score_utils.py`, to process and translate raw embeddings into human readable entities and relations.
@@ -29,9 +29,11 @@ This repository leverages seven knowledge graph completion algorithms (four embe
 * Added option to export predictions with `--output_predictions`
 
 ### Probabilistic Case-based Reasoning
-* Various bug fixes to the pcbr code as seen in `./code/pr_cbr_mod.py`, and `./code/data/get_paths.py`
-* Removed fallbacks
-* TBA
+* Added Sinha's flask implementation of prob_cbr
+* Separation of preprocessing and main script into `./prob_cbr/data/preprocessing.py` and `./prob_cbr/pr_cbr_mod.py`
+* Added parser options and hits calculations to the imain mplementation
+* Various bug fixes to the pcbr codebase like updating import, library and export pathing, doc strings, comments, parser options, deprecated code
+
 
 ### Rephetio
 * Removed various data building and evaluation notebooks
