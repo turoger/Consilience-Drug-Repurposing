@@ -528,14 +528,14 @@ def main(args):
     subgraph_dir = os.path.join(args.data_dir, "data", "subgraphs", dataset_name)
     kg_file = os.path.join(data_dir, "graph.txt")
 
-    args.dev_file = os.path.join(data_dir, "dev.txt")
+    args.dev_file = os.path.join(data_dir, args.dev_file_name)
     args.test_file = (
-        os.path.join(data_dir, "test.txt")
+        os.path.join(data_dir, args.test_file_name)
         if not args.test_file_name
         else os.path.join(data_dir, args.test_file_name)
     )
     if args.dataset_name == "FB122":
-        args.test_file = os.path.join(data_dir, "testI.txt")
+        args.test_file = os.path.join(data_dir, "test.txt")
 
     args.train_file = os.path.join(data_dir, "train.txt")
 
@@ -554,8 +554,27 @@ def main(args):
     eval_map = dev_map
     eval_file = args.dev_file
     if args.test:
+        # if args.test is True, pass in the test map to eval_map
         eval_map = test_map
         eval_file = args.test_file
+
+    if args.filter_relations is not None:
+        # filter the relations in eval_map
+        logger.info(f"Filtering relations: {args.filter_relations}")
+        
+        # check if string is passed as a string of list[strings] or just string
+        if '[' in args.filter_relations: 
+            args.filter_relations = eval(args.filter_relations)
+        else:
+            args.filter_relations = [args.filter_relations]
+        # get the filtered keys
+        keep_ls = list()
+        for h,r in eval_map.keys():
+            if r in args.filter_relations:
+                keep_ls.append((h,r))
+
+        # filter the eval_map based on the keep_ls
+        eval_map = {k: eval_map[k] for k in eval_map.keys() if k in keep_ls}
 
     rel_ent_map = get_entities_group_by_relation(args.train_file)
     # Calculate nearest neighbors
@@ -570,9 +589,8 @@ def main(args):
     # Lets put this to GPU
     adj_mat = torch.from_numpy(adj_mat)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(device)
-    logger.info("Using device:".format(device.__str__()))
+    device = torch.device("cuda" if ((args.cuda ==True)  & (torch.cuda.is_available())) else "cpu")
+    logger.info(f"Using device: {device}")
     adj_mat = adj_mat.to(device)
 
     # get the unique entities in eval set, so that we can calculate similarity in advance.
@@ -635,8 +653,10 @@ if __name__ == "__main__":
     )
     parser.add_argument("--data_dir", type=str, default="./cbr-akbc-data/")
     parser.add_argument("--subgraph_file_name", type=str, default="paths_1000.pkl")
-    parser.add_argument("--test", action="store_true")
-    parser.add_argument("--test_file_name", type=str, default="")
+    parser.add_argument("--test", action="store_true", help = "Use test file for evaluation instead of dev file")
+    parser.add_argument("--test_file_name", type=str, default="test.txt")
+    parser.add_argument("--dev_file_name", type=str, default="dev.txt")
+    parser.add_argument("--filter_relations", type=str, default = None, help = "a string or a string list of relations to filter test/dev results")
     parser.add_argument(
         "--max_num_programs",
         type=int,
@@ -668,7 +688,11 @@ if __name__ == "__main__":
         default=100,
         help="Max number of answers to return. --output_predictions must be set to True",
     )
-
+    parser.add_argument(
+        "--cuda",
+        action = "store_true",
+        help = "Use GPU if available. Unflagged runs on CPU"
+    )
     args = parser.parse_args()
     logger.info("COMMAND: %s" % " ".join(sys.argv))
     if args.use_wandb:
