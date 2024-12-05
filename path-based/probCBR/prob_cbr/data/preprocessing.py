@@ -95,6 +95,11 @@ def combine_path_splits(data_dir, file_prefix=None):
                 if not f.startswith(file_prefix):
                     continue
             file_names.append(f)
+        else:
+            continue
+    # import pdb
+
+    # pdb.set_trace()
     for f in tqdm(file_names):
         # logger.info("Reading file name: {}".format(os.path.join(data_dir, f)))
         with open(os.path.join(data_dir, f), "rb") as fin:
@@ -496,11 +501,13 @@ if __name__ == "__main__":
     assert 0 <= args.current_job < args.total_jobs and args.total_jobs > 0
     # if args.name_of_run == "unset":
     #     args.name_of_run = str(uuid.uuid4())[:8]
-    # args.output_dir = os.path.join(
-    #     args.expt_dir, "outputs", args.dataset_name, args.name_of_run
-    # )
-    # if not os.path.exists(args.output_dir):
-    #     os.makedirs(args.output_dir)
+    args.output_dir = os.path.join(
+        args.expt_dir,
+        "outputs",
+        args.dataset_name,  # args.name_of_run
+    )
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
     logger.info(f"Output directory: {args.output_dir}")
 
     dataset_name = args.dataset_name
@@ -722,7 +729,7 @@ if __name__ == "__main__":
 
     if args.combine_paths:
         logger.info(f"Loading paths generated in parallel.")
-        file_prefix = f"paths_{args.num_paths_to_collect}_path_len_{args.max_path_len}_"
+        file_prefix = f"paths_{args.num_paths_to_collect}_pathLen_{args.max_path_len}_"
         all_paths = combine_path_splits(subgraph_dir, file_prefix=file_prefix)
 
         dir_name = os.path.join(
@@ -734,7 +741,16 @@ if __name__ == "__main__":
         if not os.path.exists(dir_name):
             os.makedirs(dir_name)
         logger.info(f"Combining paths parallel paths.")
-        with open(os.path.join(dir_name, file_prefix + "combined.pkl"), "wb") as fout:
+
+        file_prefix2 = file_prefix
+        if args.prevent_loops and args.add_inv_edges:
+            file_prefix2 += "noLoops_invEdge_"
+        elif args.prevent_loops:
+            file_prefix2 += "noLoops"
+        elif args.add_inv_edges:
+            file_prefix2 += "invEdges"
+
+        with open(os.path.join(dir_name, file_prefix2 + "_combined.pkl"), "wb") as fout:
             pickle.dump(all_paths, fout)
 
     if args.combine_prior_map:
@@ -786,8 +802,23 @@ if __name__ == "__main__":
         else:
             logger.info("Prior maps not found. Combining prior maps")
             args.path_prior_map_per_entity = combine_path_splits(
-                per_entity_prior_map_dir
+                per_entity_prior_map_dir,
             )
+
+            logger.info("Exporting prior maps")
+            output_dir_name = os.path.join(
+                args.data_dir,
+                "data",
+                "outputs",
+                args.dataset_name,
+                f"linkage={args.linkage}",
+                f"path_len_{args.max_path_len}",
+                "prior_maps",
+            )
+            with open(
+                os.path.join(output_dir_name, "path_prior_map.pkl"), "wb"
+            ) as fout:
+                pickle.dump(args.path_prior_map_per_entity, fout)
 
         assert args.path_prior_map_per_entity is not None
         dir_name = os.path.join(

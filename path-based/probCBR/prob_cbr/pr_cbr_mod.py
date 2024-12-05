@@ -51,7 +51,12 @@ parser.add_argument(
     default="test.txt",
     help="Useful to switch between test files",
 )
-
+parser.add_argument(
+    "--filter_relations",
+    type=str,
+    default=None,
+    help="a string or a string list of relations to filter test/dev results",
+)
 
 # Output modifier args
 parser.add_argument("--dump_paths", type=int, choices=[0, 1], default=1)
@@ -126,6 +131,24 @@ def main(args):
         eval_map = test_map
     else:
         logger.info(f"Evaluating on dev map from {dev_file}")
+
+    if args.filter_relations is not None:
+        # filter the relations in eval_map
+        logger.info(f"Filtering relations: {args.filter_relations}")
+
+        # check if string is passed as a string of list[strings] or just string
+        if "[" in args.filter_relations:
+            args.filter_relations = eval(args.filter_relations)
+        else:
+            args.filter_relations = [args.filter_relations]
+        # get the filtered keys
+        keep_ls = list()
+        for h, r in eval_map.keys():
+            if r in args.filter_relations:
+                keep_ls.append((h, r))
+
+        # filter the eval_map based on the keep_ls
+        eval_map = {k: eval_map[k] for k in eval_map.keys() if k in keep_ls}
 
     logger.info(f"Loading relation to list of entities map")
     rel_ent_map = get_entities_group_by_relation(train_file)
@@ -416,6 +439,8 @@ class ProbCBR(object):
             unique_programs.add(tuple(p))
         # now get the score of each path
         path_and_scores = []
+        # If per_per_relation_config is not setup, then use_only_precision_scores_for_r is 0/1
+        # otherwise use the value from the config
         use_only_precision_scores_for_r = (
             self.args.use_only_precision_scores
             if self.per_relation_config is None
