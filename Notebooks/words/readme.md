@@ -1,0 +1,2 @@
+# Notes
+These notebooks aim to leverage previously published hyperparameters from [Sun et al](https://arxiv.org/abs/1902.10197) and implement the model training and prediction using the PyKEEN framework. Here we train four models (TransE, DistMult, ComplEx & RotatE) on four datasets (WN18, WN18RR, FB15k & FB15k-237) and make predictions on them.
