@@ -1,2 +1,3 @@
 # Notes:
-The openbiolink files used in these case-based reasoning approaches are derived from the original openbiolink dataset. The training was NOT done on a miniturized dataset \(as done by [paper](https://academic.oup.com/bib/article/23/6/bbac481/6831005))
+* The openbiolink files used in these case-based reasoning approaches are derived from the original openbiolink dataset. The training was NOT done on a miniturized dataset \(as done by [paper](https://academic.oup.com/bib/article/23/6/bbac481/6831005)). It would not make much scientific sense to run case-based reasoning on a miniturized dataset because you lose much of the interpretable reasoning provided by triple relationship context.
+* Please follow [../biokg/01_Sample_load_best_trial_KGEM.ipynb](../biokg/01_Sample_load_best_trial_KGEM.ipynb) to get best knowledge graph embedding parameters on the miniturized dataset. 
