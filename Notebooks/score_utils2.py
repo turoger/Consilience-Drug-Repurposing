@@ -213,58 +213,44 @@ class ProcessOutput(object):
         if self.mode == "tail-batch":
             # get true targets and merge into dataframe
             target_df_tail = self.get_true_targets()
-            df = df.drop("t")
-            df = df.join(target_df_tail, on=["h", "r"], how="left")
-            # fillna with empty list if empty
-            df = df.with_columns(pl.col("t").fill_null([])).rename({"t": "true_t"})
-            # filter out predictions that are in the true values and in 't'
-            df = df.with_columns(
-                (
-                    pl.col("true_t").list.concat(pl.col("h").cast(pl.List(pl.String)))
-                ).alias("toremove")
-            )
             df = (
-                df.with_columns(
-                    pl.struct([pl.col("preds"), pl.col("toremove")]).alias("filt_preds")
+                df.drop(["t"])
+                .join(target_df_tail, on=["h", "r"], how="left")
+                .with_columns(  # fillna with empty list if empty
+                    pl.col("t").fill_null(value=[]),
                 )
-                .with_columns(
-                    pl.col("filt_preds").map_elements(
-                        lambda x: self.remove_list_from_list(x["preds"], x["toremove"]),
-                        return_dtype=pl.List(pl.String),
+                .with_columns(pl.col("h").list.concat(pl.col("t")).alias("ht"))
+                .with_columns(  # create filtered list of predictions (remove tails and heads)
+                    pl.struct(["preds", "ht"])
+                    .alias("filt_preds")
+                    .map_elements(
+                        lambda x: self.remove_list_from_list(x["preds"], x["ht"])
                     )
                 )
-                .drop("toremove")
+                .rename({"t": "true_t"})
             )
 
         elif self.mode == "head-batch":
             target_df_head = self.get_true_targets()
-            df = df.drop(["h"])
-            df = df.join(target_df_tail, on=["r", "t"], how="left")
-            # fillna with empty list if empty
-            df = df.with_columns(pl.col("h").fill_null([])).rename({"h": "true_h"})
-
-            # filter out predictions that are in the true values and in 'h'
-            # first create new column to remove from
-            df = df.with_columns(
-                (
-                    pl.col("true_h").list.concat(pl.col("t").cast(pl.List(pl.String)))
-                ).alias("toremove")
-            )
             df = (
-                df.with_columns(
-                    pl.struct([pl.col("preds"), pl.col("toremove")]).alias("filt_preds")
+                df.drop(["h"])
+                .join(target_df_head, on=["r", "t"], how="left")
+                .with_columns(  # fillna with empty list if empty
+                    pl.col("h").fill_null(value=[]),
                 )
-                .with_columns(
-                    pl.col("filt_preds").map_elements(
-                        lambda x: self.remove_list_from_list(x["preds"], x["toremove"]),
-                        return_dtype=pl.List(pl.String),
+                .with_columns(pl.col("t").list.concat(pl.col("h")).alias("ht"))
+                .with_columns(  # create filtered list of predictions (remove tails and heads)
+                    pl.struct(["preds", "ht"])
+                    .alias("filt_preds")
+                    .map_elements(
+                        lambda x: self.remove_list_from_list(x["preds"], x["ht"])
                     )
+                    .rename({"h": "true_h"})
                 )
-                .drop("toremove")
             )
 
         # get the top number of predictions
-        df = df.with_columns(pl.col("filt_preds").list.head(top))
+        df = df.with_columns(pl.col("filt_preds").list.head(top)).drop(["ht"])
 
         return df
 
@@ -288,8 +274,6 @@ class ProcessOutput(object):
                 df.join(target_df_tail, on=["h", "r"], how="left").rename(
                     {"t": "true_t"}
                 )
-                # df = df.merge(target_df_tail, on=["h", "r"], how="left")
-                # df = df.rename(columns={"t": "true_t"})
             # mark_list_from_list is broken
             df["position"] = df.apply(
                 lambda x: self.mark_list_from_list(x["preds"], x["true_t"]), axis=1
@@ -303,8 +287,6 @@ class ProcessOutput(object):
                 df.join(target_df_head, on=["r", "t"], how="left").rename(
                     {"h": "true_h"}
                 )
-                # df = df.merge(target_df_head, on=["r", "t"], how="left")
-                # df = df.rename(columns={"h": "true_h"})
 
             df["position"] = df.apply(
                 lambda x: self.mark_list_from_list(x["preds"], x["true_h"]), axis=1
